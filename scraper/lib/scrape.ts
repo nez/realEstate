@@ -1,31 +1,36 @@
-import axios from 'axios'
 import { JSDOM } from 'jsdom'
+import got from 'got'
+import getDetails from './details'
 import logger from './logger'
 
-import getItemDetails from './details'
+const userAgents = [
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/109.0.0.0 Safari/537.36',
+  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/109.0.0.0 Safari/537.36',
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36',
+  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36',
+  'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36',
+  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.1 Safari/605.1.15',
+  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.2 Safari/605.1.15'
+]
 
-async function scrapePage (url: string): Promise<any[]> {
+const scrapePage = async (url: string): Promise<any[]> => {
   try {
-    const response = await axios.get(url)
-    const htmlContent: string = response.data
-
-    // Parse HTML using jsdom
-    const dom = new JSDOM(htmlContent)
+    const randomUserAgent = userAgents[Math.floor(Math.random() * userAgents.length)]
+    const response = await got(url, {
+      headers: {
+        'User-Agent': randomUserAgent
+      }
+    })
+    const dom = new JSDOM(response.body)
     const document = dom.window.document
 
-    const items: any = []
+    const items = Array.from(document.querySelectorAll('.cassette.js-bukkenCassette'))
+    logger.info(`Found ${items.length} properties on page.`)
+    const result = items.map(item => getDetails(item as Element))
 
-    // Find all elements with class 'cassette js-bukkenCassette'
-    const mother = document.querySelectorAll('.cassette.js-bukkenCassette')
-
-    // Loop through each element
-    mother.forEach((child: any) => {
-      items.push(getItemDetails(child))
-    })
-
-    return items
+    return result
   } catch (error) {
-    logger.error(`Error scraping ${String(url)}: ${String(error)}`)
+    logger.error(`Error scraping ${url}: ${error}`)
     return []
   }
 }
