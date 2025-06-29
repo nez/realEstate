@@ -26,5 +26,8 @@ services:
       MONGO_URI: mongodb://admin:password@mongodb:27017/?authSource=admin
       MONGO_DB_NAME: suumo
       MONGO_COLLECTION_NAME: listings
+      MONGO_COLLECTION_DETAILS: details
+      MONGO_COLLECTION_STATE: scraper_state
+      SCRAPE_MODE: LISTING  # LISTING or DETAILS
     depends_on:
       - mongodb
