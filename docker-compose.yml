@@ -1,5 +1,3 @@
-version: "3.1"
-
 services:
   mongodb:
     image: mongo:latest
@@ -22,10 +20,11 @@ services:
       dockerfile: ./docker/Dockerfile
     image: suumo-scraper
     container_name: suumo-scraper
-    restart: always
+    restart: "no"
     environment:
       TZ: Asia/Tokyo
       MONGO_URI: mongodb://admin:password@mongodb:27017/?authSource=admin
-      CRON_SCHEDULE: "* */1 * * *"
+      MONGO_DB_NAME: suumo
+      MONGO_COLLECTION_NAME: listings
     depends_on:
       - mongodb
