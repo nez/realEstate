@@ -34,7 +34,7 @@ const getItemDetails = (item: any): ItemInfo => {
   const size: string = tableInfo[4]
   const age: string = tableInfo[5]
 
-  return new ItemInfo(category, name, address, station, description, image, url, price, size, age)
+  return new ItemInfo(url, category, name, address, station, description, image, url, price, size, age)
 }
 
 export default getItemDetails

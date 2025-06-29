@@ -1,4 +1,5 @@
-class ItemInfo {
+export default class ItemInfo {
+  _id: string
   category: string
   name: string
   address: string
@@ -11,7 +12,20 @@ class ItemInfo {
   age: string
   updateDate: Date
 
-  constructor (catalog: string, name: string, address: string, station: string, description: string, image: string, url: string, price: string, size: string, age: string) {
+  constructor (
+    _id: string,
+    catalog: string,
+    name: string,
+    address: string,
+    station: string,
+    description: string,
+    image: string,
+    url: string,
+    price: string,
+    size: string,
+    age: string
+  ) {
+    this._id = _id
     this.category = catalog
     this.name = name
     this.address = address
@@ -25,5 +39,3 @@ class ItemInfo {
     this.updateDate = new Date()
   }
 }
-
-export default ItemInfo
