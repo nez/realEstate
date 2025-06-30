@@ -11,6 +11,9 @@ export default class ItemInfo {
   size: string
   age: string
   updateDate: Date
+  salePriceYen: number | null
+  rentPriceYen: number | null
+  sizeM2: number | null
 
   constructor (
     _id: string,
@@ -23,7 +26,10 @@ export default class ItemInfo {
     url: string,
     price: string,
     size: string,
-    age: string
+    age: string,
+    salePriceYen: number | null,
+    rentPriceYen: number | null,
+    sizeM2: number | null
   ) {
     this._id = _id
     this.category = catalog
@@ -36,6 +42,9 @@ export default class ItemInfo {
     this.price = price
     this.size = size
     this.age = age
+    this.salePriceYen = salePriceYen
+    this.rentPriceYen = rentPriceYen
+    this.sizeM2 = sizeM2
     this.updateDate = new Date()
   }
 }
