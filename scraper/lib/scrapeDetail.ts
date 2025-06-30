@@ -130,6 +130,9 @@ const scrapeDetailPage = async (url: string): Promise<Record<string, any> | null
     details.scrapedAt = new Date();
     details.url = url;
 
+    // Add the full HTML for debugging/further processing
+    details.html = response.body;
+
     // Extract listing ID from URL
     const urlMatch = url.match(/nc_(\d+)/);
     if (urlMatch) {
