@@ -46,20 +46,26 @@ export const extractPrice = (priceStr: string): { salePriceYen: number | null, r
   if (!priceStr) return result;
 
   try {
-    // First, try to find specific patterns with keywords
-    const salePartMatch = priceStr.match(/(?:価格|購入価格)\s*[:：]\s*([^\s]+)/);
-    const rentPartMatch = priceStr.match(/(?:賃料|月々支払額)\s*[:：]\s*([^\s]+)/);
-
-    if (salePartMatch && salePartMatch[1]) {
-      result.salePriceYen = toYen(salePartMatch[1]);
-    } else if (rentPartMatch && rentPartMatch[1]) {
-      result.rentPriceYen = toYen(rentPartMatch[1]);
-    } else {
-      // If no specific keywords found, try to extract any price at the beginning
-      // This handles cases like "5億9800万円 [ □支払シミュレーション ]"
-      const generalPriceMatch = priceStr.match(/^(\d+億?\d*万?\d*円?)/);
+    // Find all labeled price patterns
+    // e.g. "購入価格： 7100万円 月々支払額： 16.94万円"
+    const pricePattern = /(購入価格|価格|賃料|月々支払額)[:：]?\s*([\d\.]+(?:億)?[\d\.]*万?円?)/g;
+    let match;
+    let foundAny = false;
+    while ((match = pricePattern.exec(priceStr)) !== null) {
+      const label = match[1];
+      const value = match[2];
+      if (/購入価格|価格/.test(label)) {
+        result.salePriceYen = toYen(value);
+        foundAny = true;
+      } else if (/賃料|月々支払額/.test(label)) {
+        result.rentPriceYen = toYen(value);
+        foundAny = true;
+      }
+    }
+    // If nothing matched, try to extract the first price-like value as sale price
+    if (!foundAny) {
+      const generalPriceMatch = priceStr.match(/([\d\.]+(?:億)?[\d\.]*万?円?)/);
       if (generalPriceMatch && generalPriceMatch[1]) {
-        // Default to sale price if no specific type is indicated
         result.salePriceYen = toYen(generalPriceMatch[1]);
       }
     }
