@@ -42,20 +42,26 @@ const toYen = (raw: string): number | null => {
  * Looks for specific keywords to identify the price type.
  */
 export const extractPrice = (priceStr: string): { salePriceYen: number | null, rentPriceYen: number | null } => {
-  const result = { salePriceYen: null, rentPriceYen: null };
+  const result: { salePriceYen: number | null, rentPriceYen: number | null } = { salePriceYen: null, rentPriceYen: null };
   if (!priceStr) return result;
 
   try {
-    // Isolate the relevant parts of the string for sale and rent
+    // First, try to find specific patterns with keywords
     const salePartMatch = priceStr.match(/(?:価格|購入価格)\s*[:：]\s*([^\s]+)/);
     const rentPartMatch = priceStr.match(/(?:賃料|月々支払額)\s*[:：]\s*([^\s]+)/);
 
     if (salePartMatch && salePartMatch[1]) {
       result.salePriceYen = toYen(salePartMatch[1]);
-    }
-
-    if (rentPartMatch && rentPartMatch[1]) {
+    } else if (rentPartMatch && rentPartMatch[1]) {
       result.rentPriceYen = toYen(rentPartMatch[1]);
+    } else {
+      // If no specific keywords found, try to extract any price at the beginning
+      // This handles cases like "5億9800万円 [ □支払シミュレーション ]"
+      const generalPriceMatch = priceStr.match(/^(\d+億?\d*万?\d*円?)/);
+      if (generalPriceMatch && generalPriceMatch[1]) {
+        // Default to sale price if no specific type is indicated
+        result.salePriceYen = toYen(generalPriceMatch[1]);
+      }
     }
   } catch (error) {
     logger.warn(`extractPrice failed for: "${priceStr}"`, error);
