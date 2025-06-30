@@ -16,10 +16,23 @@ const scrapeDetailPage = async (url: string): Promise<Record<string, any> | null
   logger.info(`[DETAIL-START] Fetching: ${url}`)
   logger.info(`[DETAIL-CONFIG] User-Agent: ${userAgent.substring(0, 50)}...`)
 
+  // Create AbortController for explicit timeout control
+  const abortController = new AbortController()
+  const TOTAL_TIMEOUT = 25000 // 25 seconds total timeout
+
+  // Set up a process-level timeout as failsafe
+  const timeoutId = setTimeout(() => {
+    logger.warn(`[DETAIL-TIMEOUT] Force aborting request after ${TOTAL_TIMEOUT}ms`)
+    abortController.abort()
+  }, TOTAL_TIMEOUT)
+
   try {
-    // Step 1: HTTP Request with timeout and detailed logging
+    // Step 1: HTTP Request with enhanced timeout and detailed logging
     logger.info(`[DETAIL-HTTP] Starting HTTP request...`)
+    logger.info(`[DETAIL-HTTP] Timeout configured: ${TOTAL_TIMEOUT}ms`)
+
     const response = await got(url, {
+      signal: abortController.signal,
       headers: {
         'User-Agent': userAgent,
         'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
@@ -30,8 +43,10 @@ const scrapeDetailPage = async (url: string): Promise<Record<string, any> | null
         'Upgrade-Insecure-Requests': '1',
       },
       timeout: {
-        request: 30000, // 30 second total timeout
-        response: 15000 // 15 second response timeout
+        request: 20000, // 20 second total timeout (lower than AbortController)
+        response: 10000, // 10 second response timeout
+        connect: 5000,  // 5 second connect timeout
+        lookup: 3000    // 3 second DNS lookup timeout
       },
       retry: {
         limit: 2,
@@ -41,7 +56,8 @@ const scrapeDetailPage = async (url: string): Promise<Record<string, any> | null
       hooks: {
         beforeRequest: [
           (options) => {
-            logger.info(`[DETAIL-HTTP] Request starting to: ${options.url}`)
+            const elapsed = Date.now() - startTime
+            logger.info(`[DETAIL-HTTP] Request starting to: ${options.url} (${elapsed}ms elapsed)`)
           }
         ],
         afterResponse: [
@@ -52,9 +68,19 @@ const scrapeDetailPage = async (url: string): Promise<Record<string, any> | null
             logger.info(`[DETAIL-HTTP] Content-Type: ${response.headers['content-type']}`)
             return response
           }
+        ],
+        beforeError: [
+          (error) => {
+            const elapsed = Date.now() - startTime
+            logger.error(`[DETAIL-HTTP] Request error after ${elapsed}ms: ${error.message}`)
+            return error
+          }
         ]
       }
     })
+
+    // Clear the timeout since request succeeded
+    clearTimeout(timeoutId)
 
     // Step 2: Response validation
     logger.info(`[DETAIL-VALIDATE] Validating response...`)
@@ -228,6 +254,9 @@ const scrapeDetailPage = async (url: string): Promise<Record<string, any> | null
 
     return details;
   } catch (error: any) {
+    // Always clear the timeout
+    clearTimeout(timeoutId)
+
     const totalTime = Date.now() - startTime
     logger.error(`[DETAIL-ERROR] Failed after ${totalTime}ms for URL: ${url}`)
     logger.error(`[DETAIL-ERROR] Error type: ${error.constructor.name}`)
@@ -242,8 +271,12 @@ const scrapeDetailPage = async (url: string): Promise<Record<string, any> | null
       logger.error(`[DETAIL-ERROR] Response headers: ${JSON.stringify(error.response.headers)}`)
     }
 
-    if (error.name === 'TimeoutError') {
+    if (error.name === 'TimeoutError' || error.name === 'AbortError') {
       logger.error(`[DETAIL-ERROR] Request timed out - this may indicate network issues or rate limiting`)
+    }
+
+    if (error.name === 'RequestError') {
+      logger.error(`[DETAIL-ERROR] Request failed - network or connectivity issue`)
     }
 
     logger.error(`[DETAIL-ERROR] Full error: ${error}`)
