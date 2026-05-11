@@ -7,11 +7,16 @@ services:
       MONGO_INITDB_ROOT_USERNAME: ${MONGO_INITDB_ROOT_USERNAME:?set MONGO_INITDB_ROOT_USERNAME in .env}
       MONGO_INITDB_ROOT_PASSWORD: ${MONGO_INITDB_ROOT_PASSWORD:?set MONGO_INITDB_ROOT_PASSWORD in .env}
       MONGO_INITDB_DATABASE: ${MONGO_INITDB_DATABASE:-suumo}
+      # Used by ./mongodb/init/01-create-app-user.sh on a virgin data volume to
+      # create a readWrite-only app user; the scraper then connects as this user.
+      MONGO_APP_USERNAME: ${MONGO_APP_USERNAME:-suumo_app}
+      MONGO_APP_PASSWORD: ${MONGO_APP_PASSWORD:?set MONGO_APP_PASSWORD in .env}
       TZ: Asia/Tokyo
     ports:
       - 27017:27017
     volumes:
       - mongodb-data:/data/db
+      - ./mongodb/init:/docker-entrypoint-initdb.d:ro
 
   scraper:
     build:
@@ -22,7 +27,8 @@ services:
     restart: "no"
     environment:
       TZ: Asia/Tokyo
-      MONGO_URI: ${MONGO_URI:?set MONGO_URI in .env}
+      # The scraper connects as the least-privilege app user, not root.
+      MONGO_URI: ${MONGO_URI_APP:?set MONGO_URI_APP in .env}
       MONGO_DB_NAME: ${MONGO_DB_NAME:-suumo}
       MONGO_COLLECTION_NAME: ${MONGO_COLLECTION_NAME:-listings}
       MONGO_COLLECTION_DETAILS: ${MONGO_COLLECTION_DETAILS:-details}

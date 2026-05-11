@@ -8,8 +8,12 @@ Copy the env templates and fill in real credentials. Both files are gitignored.
 ```
 cp .env.example .env
 cp scraper/.env.example scraper/.env
-# edit both to set MONGO_INITDB_ROOT_PASSWORD / MONGO_URI
+# Edit both. Set:
+#   .env         — MONGO_INITDB_ROOT_PASSWORD, MONGO_APP_PASSWORD, MONGO_URI_APP, MONGO_URI_ROOT
+#   scraper/.env — MONGO_URI (point at the app user, not root)
 ```
+
+The mongo image's first-boot init creates a `suumo_app` user (`readWrite` on `suumo` only) from `MONGO_APP_*`. The scraper connects as that user; only the nightly mongodump uses root.
 
 # Deploy
 ## How to run this in docker?
@@ -25,15 +29,20 @@ docker build -f ./scraper/docker/Dockerfile -t suumo-scraper:latest ./scraper/. 
 # Import into k3s' containerd (replace `minikube image load` if migrating from minikube)
 docker save suumo-scraper:latest | sudo k3s ctr images import -
 
-# Create the namespace and secret (see secret.example.yaml for the shape)
+# Create the namespace and secret (see secret.example.yaml for the shape).
+# Two URIs: scraper uses the app one, backup uses root.
 kubectl create namespace realestate
 kubectl create secret generic mongodb-creds -n realestate \
   --from-literal=MONGO_INITDB_ROOT_USERNAME=admin \
-  --from-literal=MONGO_INITDB_ROOT_PASSWORD='<rotated-password>' \
+  --from-literal=MONGO_INITDB_ROOT_PASSWORD='<rotated-root-password>' \
   --from-literal=MONGO_INITDB_DATABASE=suumo \
-  --from-literal=MONGO_URI='mongodb://admin:<rotated-password>@mongodb.realestate.svc.cluster.local:27017/?authSource=admin'
+  --from-literal=MONGO_APP_USERNAME=suumo_app \
+  --from-literal=MONGO_APP_PASSWORD='<app-password>' \
+  --from-literal=MONGO_URI_ROOT='mongodb://admin:<rotated-root-password>@mongodb.realestate.svc.cluster.local:27017/?authSource=admin' \
+  --from-literal=MONGO_URI_APP='mongodb://suumo_app:<app-password>@mongodb.realestate.svc.cluster.local:27017/?authSource=suumo'
 
-# Apply the manifest (creates the mongodb Deployment and two CronJobs)
+# Apply the manifest (Service, ConfigMap, PVCs, Deployment, scraper CronJobs,
+# backup CronJob)
 kubectl apply -f deployment.yaml
 
 # Verify
@@ -41,6 +50,30 @@ kubectl -n realestate get all
 
 # Access mongodb from your host
 kubectl -n realestate port-forward deployments/mongodb 27017:27017
+```
+
+### Upgrading an existing deployment to the least-privilege user
+The init script only runs on a virgin `/data/db`. For existing data, create
+the app user manually once:
+```
+kubectl -n realestate exec -it deployments/mongodb -- mongosh \
+  -u admin -p '<root-password>' --authenticationDatabase admin \
+  --eval "db.getSiblingDB('suumo').createUser({
+    user: 'suumo_app',
+    pwd: '<app-password>',
+    roles: [{role: 'readWrite', db: 'suumo'}]
+  })"
+```
+
+### Restoring from a backup
+The nightly CronJob writes `suumo-YYYYMMDD-HHMMSS.archive.gz` to the
+`mongodb-backup` PVC. To restore:
+```
+kubectl -n realestate run mongo-restore --rm -it --restart=Never \
+  --image=mongo:7.0 \
+  --overrides='{"spec":{"volumes":[{"name":"backup","persistentVolumeClaim":{"claimName":"mongodb-backup"}}],"containers":[{"name":"mongo-restore","image":"mongo:7.0","stdin":true,"tty":true,"volumeMounts":[{"name":"backup","mountPath":"/backup"}],"command":["bash"]}]}}'
+# Inside the pod:
+mongorestore --uri="<MONGO_URI_ROOT>" --gzip --archive=/backup/suumo-<TS>.archive.gz --drop
 ```
 
 ## Tips

@@ -8,9 +8,12 @@ metadata:
 # Create the Secret before applying this manifest:
 #   kubectl create secret generic mongodb-creds -n realestate \
 #     --from-literal=MONGO_INITDB_ROOT_USERNAME=admin \
-#     --from-literal=MONGO_INITDB_ROOT_PASSWORD='<rotated-password>' \
+#     --from-literal=MONGO_INITDB_ROOT_PASSWORD='<rotated-root-password>' \
 #     --from-literal=MONGO_INITDB_DATABASE=suumo \
-#     --from-literal=MONGO_URI='mongodb://admin:<rotated-password>@mongodb.realestate.svc.cluster.local:27017/?authSource=admin'
+#     --from-literal=MONGO_APP_USERNAME=suumo_app \
+#     --from-literal=MONGO_APP_PASSWORD='<app-password>' \
+#     --from-literal=MONGO_URI_ROOT='mongodb://admin:<rotated-root-password>@mongodb.realestate.svc.cluster.local:27017/?authSource=admin' \
+#     --from-literal=MONGO_URI_APP='mongodb://suumo_app:<app-password>@mongodb.realestate.svc.cluster.local:27017/?authSource=suumo'
 # See secret.example.yaml for the shape.
 apiVersion: v1
 kind: Service
@@ -26,6 +29,47 @@ spec:
       targetPort: 27017
   selector:
     io.kompose.service: mongodb
+
+---
+# Init script mounted into the mongo image's /docker-entrypoint-initdb.d.
+# Runs only on a virgin /data/db — for existing deployments, see README for
+# the equivalent one-shot mongosh command.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mongodb-init
+  namespace: realestate
+data:
+  01-create-app-user.sh: |
+    #!/bin/bash
+    set -euo pipefail
+    APP_USER="${MONGO_APP_USERNAME:-suumo_app}"
+    APP_DB="${MONGO_INITDB_DATABASE:-suumo}"
+    if [[ -z "${MONGO_APP_PASSWORD:-}" ]]; then
+      echo "MONGO_APP_PASSWORD is not set — skipping app-user creation." >&2
+      exit 0
+    fi
+    echo "Creating app user '$APP_USER' with readWrite on '$APP_DB'..."
+    mongosh --quiet --eval "
+      const dbName = '${APP_DB}';
+      const user = '${APP_USER}';
+      const pwd = '${MONGO_APP_PASSWORD}';
+      const target = db.getSiblingDB(dbName);
+      try {
+        target.createUser({
+          user: user,
+          pwd: pwd,
+          roles: [{ role: 'readWrite', db: dbName }]
+        });
+        print('App user created on ' + dbName);
+      } catch (e) {
+        if (String(e.message).includes('already exists')) {
+          print('App user already exists, skipping.');
+        } else {
+          throw e;
+        }
+      }
+    "
 
 ---
 # Persistent storage for mongo data. Without this every pod restart wipes
@@ -91,10 +135,17 @@ spec:
           volumeMounts:
             - name: data
               mountPath: /data/db
+            - name: init
+              mountPath: /docker-entrypoint-initdb.d
+              readOnly: true
       volumes:
         - name: data
           persistentVolumeClaim:
             claimName: mongodb-data
+        - name: init
+          configMap:
+            name: mongodb-init
+            defaultMode: 0755
       restartPolicy: Always
 
 ---
@@ -123,11 +174,12 @@ spec:
               env:
                 - name: TZ
                   value: Asia/Tokyo
+                # mongodump needs root privileges to read every collection.
                 - name: MONGO_URI
                   valueFrom:
                     secretKeyRef:
                       name: mongodb-creds
-                      key: MONGO_URI
+                      key: MONGO_URI_ROOT
               command:
                 - /bin/bash
                 - -c
@@ -183,7 +235,7 @@ spec:
                   valueFrom:
                     secretKeyRef:
                       name: mongodb-creds
-                      key: MONGO_URI
+                      key: MONGO_URI_APP
 
 ---
 # Detail crawler: fills in details for unscraped listings. Runs frequently.
@@ -221,4 +273,4 @@ spec:
                   valueFrom:
                     secretKeyRef:
                       name: mongodb-creds
-                      key: MONGO_URI
+                      key: MONGO_URI_APP
