@@ -28,6 +28,32 @@ spec:
     io.kompose.service: mongodb
 
 ---
+# Persistent storage for mongo data. Without this every pod restart wipes
+# the database — the old Deployment was effectively emptyDir.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: mongodb-data
+  namespace: realestate
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 10Gi
+
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: mongodb-backup
+  namespace: realestate
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 5Gi
+
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -37,6 +63,10 @@ metadata:
   namespace: realestate
 spec:
   replicas: 1
+  strategy:
+    # ReadWriteOnce PVCs can't be attached to two pods; rolling updates would
+    # deadlock. Recreate kills the old pod before starting the new one.
+    type: Recreate
   selector:
     matchLabels:
       io.kompose.service: mongodb
@@ -58,7 +88,66 @@ spec:
           ports:
             - containerPort: 27017
               protocol: TCP
+          volumeMounts:
+            - name: data
+              mountPath: /data/db
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: mongodb-data
       restartPolicy: Always
+
+---
+# Daily mongodump → /backup PVC. Keeps the last 14 days of archives.
+# The same root MONGO_URI from mongodb-creds is reused.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: mongodb-backup
+  namespace: realestate
+spec:
+  schedule: "0 4 * * *"
+  timeZone: Asia/Tokyo
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      template:
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: mongodump
+              image: mongo:7.0
+              env:
+                - name: TZ
+                  value: Asia/Tokyo
+                - name: MONGO_URI
+                  valueFrom:
+                    secretKeyRef:
+                      name: mongodb-creds
+                      key: MONGO_URI
+              command:
+                - /bin/bash
+                - -c
+                - |
+                  set -euo pipefail
+                  TS=$(date +%Y%m%d-%H%M%S)
+                  ARCHIVE=/backup/suumo-$TS.archive.gz
+                  echo "Dumping to $ARCHIVE"
+                  mongodump --uri="$MONGO_URI" --gzip --archive="$ARCHIVE"
+                  echo "Pruning archives older than 14 days..."
+                  find /backup -maxdepth 1 -name 'suumo-*.archive.gz' -mtime +14 -delete
+                  echo "Backup directory state:"
+                  ls -lh /backup/ | tail -20
+              volumeMounts:
+                - name: backup
+                  mountPath: /backup
+          volumes:
+            - name: backup
+              persistentVolumeClaim:
+                claimName: mongodb-backup
 
 ---
 # Listing crawler: discovers properties from index pages. Runs nightly.
