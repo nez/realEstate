@@ -91,6 +91,14 @@ const runListings = async (args: string[]): Promise<void> => {
   const [sortField, sortDir] = sortEntry
   const limit = values.limit ? parseInt(values.limit, 10) : 20
 
+  // Sorting on a sale-only quantity means rent-only and price-less rows
+  // shouldn't appear — their values would be null and clutter the top of
+  // the table.
+  if (sortField === 'pricePerM2' || sortField === 'salePriceYen') {
+    match.salePriceYen = { ...(match.salePriceYen as object ?? {}), $ne: null }
+    match.sizeM2 = { ...(match.sizeM2 as object ?? {}), $gt: 0 }
+  }
+
   const pipeline: any[] = [{ $match: match }]
   pipeline.push({
     $addFields: {
