@@ -29,6 +29,7 @@ services:
       MONGO_COLLECTION_STATE: ${MONGO_COLLECTION_STATE:-scraper_state}
       SCRAPE_MODE: ${SCRAPE_MODE:-LISTING}
       STORE_HTML: ${STORE_HTML:-true}
+      MAX_REQ_PER_MINUTE: ${MAX_REQ_PER_MINUTE:-30}
     depends_on:
       - mongodb
 

@@ -13,8 +13,6 @@ import {
 } from '../lib/changes'
 import { ensureIndexes } from '../lib/indexes'
 
-const sleep = async (ms: number) => await new Promise(resolve => setTimeout(resolve, ms))
-
 // Crash-resume window. If the prior run's state is older than this we treat it
 // as abandoned and start fresh at page 1. Each successful nightly run completes
 // in well under this window.
@@ -145,7 +143,6 @@ const crawler = async (): Promise<void> => {
             { stateId: 'crawler' },
             { $set: { lastPage: i } }
           )
-          await sleep(Math.floor(Math.random() * 1000) + 2000)
           continue
         }
 
@@ -221,8 +218,6 @@ const crawler = async (): Promise<void> => {
           { stateId: 'crawler' },
           { $set: { lastPage: i } }
         )
-
-        await sleep(Math.floor(Math.random() * 1000) + 2000)
       } catch (error: any) {
         logger.error(`Error processing page ${i}: ${error.message}`)
         if (error.code === 'ECONNREFUSED') {

@@ -1,5 +1,6 @@
-import got from 'got'
 import { JSDOM } from 'jsdom'
+import logger from './logger'
+import { fetchHtml } from './http'
 
 const getItemNumber = (document: any): number => {
   let totalItems = 0
@@ -25,15 +26,15 @@ const getMaxPageNumber = (document: any): number => {
 const getNumbers = async (): Promise<{ totalItems: number, maxPageNumber: number }> => {
   const startPath = process.env.START_PATH ?? ''
   if (!startPath) throw new Error('START_PATH env var is not set')
-  const response = await got(startPath)
-  const htmlContent = response.body
+  const { body } = await fetchHtml(startPath)
 
-  const dom = new JSDOM(htmlContent)
+  const dom = new JSDOM(body)
   const document = dom.window.document
 
   const totalItems = getItemNumber(document)
   const maxPageNumber = getMaxPageNumber(document)
 
+  logger.info(`Index page parsed: totalItems=${totalItems}, maxPageNumber=${maxPageNumber}`)
   return { totalItems, maxPageNumber }
 }
 

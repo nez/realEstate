@@ -12,10 +12,7 @@ import {
 } from '../lib/status'
 import { ensureIndexes } from '../lib/indexes'
 
-const sleep = async (ms: number) => await new Promise(resolve => setTimeout(resolve, ms))
-
 const BATCH_SIZE = 20
-const REQUEST_DELAY_RANGE_MS = [2000, 3000] as const
 
 const applyOutcome = async (
   listingsCollection: Collection,
@@ -176,14 +173,10 @@ const detailCrawler = async (): Promise<void> => {
         if (outcome === 'success') successCount++
         else errorCount++
 
-        if (i < batch.length - 1) {
-          const [lo, hi] = REQUEST_DELAY_RANGE_MS
-          await sleep(Math.floor(Math.random() * (hi - lo)) + lo)
-        }
+        // Inter-request spacing is now owned by lib/http.ts (MAX_REQ_PER_MINUTE).
       }
 
       pending = await collections.listings.countDocuments(eligibleForDetailScrape())
-      if (pending > 0) await sleep(2000)
     }
 
     const totalMin = Math.round((Date.now() - startTime) / 60_000)

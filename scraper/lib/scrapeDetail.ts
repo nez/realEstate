@@ -1,14 +1,8 @@
 import { JSDOM } from 'jsdom'
-import got from 'got'
 import logger from './logger'
 import { extractPrice, parseSquareMeters } from './parserUtils'
 import { classifyError } from './status'
-
-const userAgents = [
-  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/109.0.0.0 Safari/537.36',
-  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/109.0.0.0 Safari/537.36',
-  'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36'
-]
+import { detectBlockPage, fetchHtml } from './http'
 
 export type ScrapeResult =
   | { kind: 'success', data: Record<string, any> }
@@ -22,13 +16,11 @@ const cleanValue = (value: string): string =>
     .trim()
 
 // Pure parser: takes a fetched HTML body and the source URL, returns a ScrapeResult.
-// Pulled out of scrapeDetailPage so it's testable without a real HTTP fetch.
+// Separated from the HTTP layer so it's testable without a real network fetch.
 export const parseDetailHtml = (html: string, url: string): ScrapeResult => {
-  if (!html || html.length < 1000) {
-    return { kind: 'transient', reason: `response too small (${html?.length ?? 0} bytes)` }
-  }
-  if (!html.includes('html') && !html.includes('HTML')) {
-    return { kind: 'transient', reason: 'response not HTML' }
+  const block = detectBlockPage(html)
+  if (block.blocked) {
+    return { kind: 'transient', reason: block.reason ?? 'block page detected' }
   }
 
   const dom = new JSDOM(html)
@@ -120,60 +112,23 @@ export const parseDetailHtml = (html: string, url: string): ScrapeResult => {
 
 const scrapeDetailPage = async (url: string): Promise<ScrapeResult> => {
   const startTime = Date.now()
-  const userAgent = userAgents[Math.floor(Math.random() * userAgents.length)]
-
-  logger.info(`[DETAIL-START] Fetching: ${url}`)
-
-  const abortController = new AbortController()
-  const TOTAL_TIMEOUT = 25000
-
-  const timeoutId = setTimeout(() => {
-    logger.warn(`[DETAIL-TIMEOUT] Force aborting request after ${TOTAL_TIMEOUT}ms`)
-    abortController.abort()
-  }, TOTAL_TIMEOUT)
-
-  let responseBody: string
+  let body: string
   try {
-    const response = await got(url, {
-      signal: abortController.signal,
-      headers: {
-        'User-Agent': userAgent,
-        Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-        'Accept-Language': 'ja,en-US;q=0.9,en;q=0.8',
-        'Accept-Encoding': 'gzip, deflate, br',
-        DNT: '1',
-        Connection: 'keep-alive',
-        'Upgrade-Insecure-Requests': '1'
-      },
-      timeout: {
-        request: 20000,
-        response: 10000,
-        connect: 5000,
-        lookup: 3000
-      },
-      retry: {
-        limit: 2,
-        methods: ['GET'],
-        statusCodes: [408, 413, 429, 500, 502, 503, 504, 521, 522, 524]
-      }
-    })
-    clearTimeout(timeoutId)
-    responseBody = response.body
-    logger.info(`[DETAIL-HTTP] ${response.statusCode} (${response.body.length}B, ${Date.now() - startTime}ms)`)
+    const result = await fetchHtml(url)
+    body = result.body
   } catch (error: any) {
-    clearTimeout(timeoutId)
     const kind = classifyError(error)
     const reason = `${error.constructor?.name ?? 'Error'}: ${error.message ?? String(error)}` +
       (error.response?.statusCode ? ` [HTTP ${error.response.statusCode}]` : '')
-    logger.error(`[DETAIL-${kind.toUpperCase()}] ${reason}`)
+    logger.error(`[DETAIL-${kind.toUpperCase()}] ${url}: ${reason}`)
     return { kind, reason }
   }
 
-  const result = parseDetailHtml(responseBody, url)
+  const result = parseDetailHtml(body, url)
   if (result.kind === 'success') {
     logger.info(`[DETAIL-SUCCESS] ${Object.keys(result.data).length} fields in ${Date.now() - startTime}ms`)
   } else {
-    logger.warn(`[DETAIL-${result.kind.toUpperCase()}] ${result.reason}`)
+    logger.warn(`[DETAIL-${result.kind.toUpperCase()}] ${url}: ${result.reason}`)
   }
   return result
 }

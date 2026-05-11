@@ -86,6 +86,8 @@ spec:
               env:
                 - name: TZ
                   value: Asia/Tokyo
+                - name: MAX_REQ_PER_MINUTE
+                  value: "30"
                 - name: SCRAPE_MODE
                   value: LISTING
                 - name: MONGO_URI
@@ -120,6 +122,8 @@ spec:
               env:
                 - name: TZ
                   value: Asia/Tokyo
+                - name: MAX_REQ_PER_MINUTE
+                  value: "30"
                 - name: SCRAPE_MODE
                   value: DETAIL
                 - name: STORE_HTML
