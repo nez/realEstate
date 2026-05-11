@@ -1,4 +1,4 @@
-import axios from 'axios'
+import got from 'got'
 import { JSDOM } from 'jsdom'
 
 const getItemNumber = (document: any): number => {
@@ -24,10 +24,10 @@ const getMaxPageNumber = (document: any): number => {
 
 const getNumbers = async (): Promise<{ totalItems: number, maxPageNumber: number }> => {
   const startPath = process.env.START_PATH ?? ''
-  const response = await axios.get(startPath)
-  const htmlContent: string = response.data // Explicitly type htmlContent as string
+  if (!startPath) throw new Error('START_PATH env var is not set')
+  const response = await got(startPath)
+  const htmlContent = response.body
 
-  // Parse HTML using jsdom
   const dom = new JSDOM(htmlContent)
   const document = dom.window.document
 

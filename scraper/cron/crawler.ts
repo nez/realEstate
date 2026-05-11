@@ -3,10 +3,8 @@ import scrapePage from '../lib/scrape'
 import { getNumbers } from '../lib/number'
 import client from '../lib/client'
 import logger from '../lib/logger'
-import { promises as fs } from 'fs'
-import path from 'path'
 
-const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+const sleep = async (ms: number) => await new Promise(resolve => setTimeout(resolve, ms))
 
 const crawler = async (): Promise<void> => {
   logger.info('Start: Crawler is scraping and saving to the database...')

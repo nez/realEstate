@@ -26,7 +26,7 @@ const scrapePage = async (url: string): Promise<any[]> => {
 
     const items = Array.from(document.querySelectorAll('.cassette.js-bukkenCassette'))
     logger.info(`Found ${items.length} properties on page.`)
-    const result = items.map(item => getDetails(item as Element))
+    const result = items.map(item => getDetails(item))
 
     return result
   } catch (error) {

@@ -2,7 +2,7 @@ import client from '../lib/client'
 import logger from '../lib/logger'
 import scrapeDetailPage from '../lib/scrapeDetail'
 
-const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
+const sleep = async (ms: number) => await new Promise(resolve => setTimeout(resolve, ms))
 
 const detailCrawler = async (): Promise<void> => {
   const startTime = Date.now()
@@ -21,7 +21,7 @@ const detailCrawler = async (): Promise<void> => {
     const listingsCollectionName = process.env.MONGO_COLLECTION_NAME ?? 'listings'
     const detailsCollectionName = process.env.MONGO_COLLECTION_DETAILS ?? 'details'
 
-    logger.info(`📊 Configuration:`)
+    logger.info('📊 Configuration:')
     logger.info(`   Database: '${dbName}'`)
     logger.info(`   Source Collection: '${listingsCollectionName}'`)
     logger.info(`   Target Collection: '${detailsCollectionName}'`)
@@ -36,7 +36,7 @@ const detailCrawler = async (): Promise<void> => {
     const scrapedCount = await listingsCollection.countDocuments({ scraped: true })
     const totalListings = await listingsCollection.countDocuments({})
 
-    logger.info(`📈 Initial Progress Status:`)
+    logger.info('📈 Initial Progress Status:')
     logger.info(`   Total listings: ${totalListings}`)
     logger.info(`   Already scraped: ${scrapedCount}`)
     logger.info(`   Remaining to scrape: ${totalCount}`)
@@ -67,10 +67,9 @@ const detailCrawler = async (): Promise<void> => {
           logger.info('✅ No more unscraped documents found. Batch processing complete.')
           break
         }
-
       } catch (batchError: any) {
         logger.error(`❌ Error retrieving batch ${batchNumber}: ${batchError.message}`)
-        logger.error(`   Will retry next batch in 10 seconds...`)
+        logger.error('   Will retry next batch in 10 seconds...')
         await sleep(10000)
         continue
       }
@@ -102,7 +101,7 @@ const detailCrawler = async (): Promise<void> => {
               { _id: doc._id },
               { $set: { scraped: true, scrapedAt: new Date(), error: 'No URL found' } }
             )
-            logger.info(`   Marked document as scraped (with error) to avoid reprocessing`)
+            logger.info('   Marked document as scraped (with error) to avoid reprocessing')
           } catch (updateError: any) {
             logger.error(`   Failed to mark document as scraped: ${updateError.message}`)
           }
@@ -130,17 +129,15 @@ const detailCrawler = async (): Promise<void> => {
                 { $set: { scraped: true, scrapedAt: new Date() } }
               )
 
-              logger.info(`✅ Successfully saved details and marked as scraped`)
+              logger.info('✅ Successfully saved details and marked as scraped')
               logger.info(`   Fields extracted: ${Object.keys(detailData).length}`)
               logger.info(`   Images found: ${detailData.images?.length || 0}`)
               successCount++
-
             } catch (saveError: any) {
               logger.error(`❌ Failed to save scraped data: ${saveError.message}`)
-              logger.error(`   Will continue with next document...`)
+              logger.error('   Will continue with next document...')
               errorCount++
             }
-
           } else {
             logger.error(`❌ Failed to scrape details for: ${doc.name} (${doc.url})`)
             logger.error(`   Scraping returned null after ${scrapeTime}ms`)
@@ -152,12 +149,11 @@ const detailCrawler = async (): Promise<void> => {
                 { _id: doc._id },
                 { $set: { scraped: true, scrapedAt: new Date(), error: 'Scraping returned null' } }
               )
-              logger.info(`   Marked as scraped (with error) to avoid reprocessing`)
+              logger.info('   Marked as scraped (with error) to avoid reprocessing')
             } catch (updateError: any) {
               logger.error(`   Failed to mark document as scraped: ${updateError.message}`)
             }
           }
-
         } catch (scrapeError: any) {
           const scrapeTime = Date.now() - scrapeStartTime
           logger.error(`💥 Exception while scraping: ${doc.name} (${doc.url})`)
@@ -171,7 +167,7 @@ const detailCrawler = async (): Promise<void> => {
               { _id: doc._id },
               { $set: { scraped: true, scrapedAt: new Date(), error: scrapeError.message } }
             )
-            logger.info(`   Marked as scraped (with error) to avoid reprocessing`)
+            logger.info('   Marked as scraped (with error) to avoid reprocessing')
           } catch (updateError: any) {
             logger.error(`   Failed to mark document as scraped: ${updateError.message}`)
           }
@@ -192,13 +188,12 @@ const detailCrawler = async (): Promise<void> => {
         totalCount = newCount
 
         if (totalCount > 0) {
-          logger.info(`⏸️  Brief pause between batches...`)
+          logger.info('⏸️  Brief pause between batches...')
           await sleep(2000) // Brief pause between batches
         }
-
       } catch (countError: any) {
         logger.error(`❌ Error getting updated count: ${countError.message}`)
-        logger.error(`   Will continue with next batch anyway...`)
+        logger.error('   Will continue with next batch anyway...')
         await sleep(5000)
       }
     }
@@ -209,7 +204,7 @@ const detailCrawler = async (): Promise<void> => {
     logger.info('\n' + '='.repeat(50))
     logger.info('🏁 DETAIL CRAWLER FINISHED')
     logger.info('='.repeat(50))
-    logger.info(`📊 Final Statistics:`)
+    logger.info('📊 Final Statistics:')
     logger.info(`   Batches processed: ${batchNumber}`)
     logger.info(`   Total processed: ${processedCount}`)
     logger.info(`   Successful: ${successCount}`)
@@ -217,7 +212,6 @@ const detailCrawler = async (): Promise<void> => {
     logger.info(`   Success rate: ${processedCount > 0 ? ((successCount / processedCount) * 100).toFixed(1) : 0}%`)
     logger.info(`   Total time: ${totalMinutes} minutes`)
     logger.info(`   Average time per listing: ${processedCount > 0 ? Math.round(totalTime / processedCount / 1000) : 0} seconds`)
-
   } catch (error: any) {
     const totalTime = Date.now() - startTime
     logger.error('\n' + '='.repeat(50))
@@ -230,7 +224,7 @@ const detailCrawler = async (): Promise<void> => {
     logger.error(`Stack trace: ${error.stack}`)
 
     // Don't throw - let it exit gracefully with the statistics we have
-    logger.error(`🛑 Exiting gracefully despite fatal error`)
+    logger.error('🛑 Exiting gracefully despite fatal error')
   }
 }
 

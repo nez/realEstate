@@ -3,7 +3,9 @@
   "module": "index.ts",
   "type": "module",
   "scripts": {
-    "dev": "bun run index.ts"
+    "dev": "bun run index.ts",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint ."
   },
   "devDependencies": {
     "@types/bun": "latest",
@@ -20,7 +22,6 @@
   },
   "dependencies": {
     "@types/jsdom": "^21.1.6",
-    "axios": "^1.6.7",
     "got": "^14.2.1",
     "jsdom": "^24.0.0",
     "mongodb": "^6.5.0",
