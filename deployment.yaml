@@ -3,15 +3,18 @@ apiVersion: v1
 kind: Namespace
 metadata:
   name: realestate
-  namespace: realestate
 
 ---
+# Create the Secret before applying this manifest:
+#   kubectl create secret generic mongodb-creds -n realestate \
+#     --from-literal=MONGO_INITDB_ROOT_USERNAME=admin \
+#     --from-literal=MONGO_INITDB_ROOT_PASSWORD='<rotated-password>' \
+#     --from-literal=MONGO_INITDB_DATABASE=suumo \
+#     --from-literal=MONGO_URI='mongodb://admin:<rotated-password>@mongodb.realestate.svc.cluster.local:27017/?authSource=admin'
+# See secret.example.yaml for the shape.
 apiVersion: v1
 kind: Service
 metadata:
-  annotations:
-    kompose.cmd: kompose convert -f docker-compose.yml -n realestate -o deployment.yaml
-    kompose.version: 1.32.0 (765fde254)
   labels:
     io.kompose.service: mongodb
   name: mongodb
@@ -28,9 +31,6 @@ spec:
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  annotations:
-    kompose.cmd: kompose convert -f docker-compose.yml -n realestate -o deployment.yaml
-    kompose.version: 1.32.0 (765fde254)
   labels:
     io.kompose.service: mongodb
   name: mongodb
@@ -42,28 +42,21 @@ spec:
       io.kompose.service: mongodb
   template:
     metadata:
-      annotations:
-        kompose.cmd: kompose convert -f docker-compose.yml -n realestate -o deployment.yaml
-        kompose.version: 1.32.0 (765fde254)
       labels:
         io.kompose.network/realestate-default: "true"
         io.kompose.service: mongodb
     spec:
       containers:
-        - env:
-            - name: MONGO_INITDB_DATABASE
-              value: suumo
-            - name: MONGO_INITDB_ROOT_PASSWORD
-              value: REDACTED
-            - name: MONGO_INITDB_ROOT_USERNAME
-              value: admin
+        - name: mongodb
+          image: mongo:latest
+          envFrom:
+            - secretRef:
+                name: mongodb-creds
+          env:
             - name: TZ
               value: Asia/Tokyo
-          image: mongo:latest
-          name: mongodb
           ports:
             - containerPort: 27017
-              hostPort: 27017
               protocol: TCP
       restartPolicy: Always
 
@@ -71,9 +64,6 @@ spec:
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  annotations:
-    kompose.cmd: kompose convert -f docker-compose.yml -n realestate -o deployment.yaml
-    kompose.version: 1.32.0 (765fde254)
   labels:
     io.kompose.service: scraper
   name: scraper
@@ -85,23 +75,22 @@ spec:
       io.kompose.service: scraper
   template:
     metadata:
-      annotations:
-        kompose.cmd: kompose convert -f docker-compose.yml -n realestate -o deployment.yaml
-        kompose.version: 1.32.0 (765fde254)
       labels:
         io.kompose.network/realestate-default: "true"
         io.kompose.service: scraper
     spec:
       containers:
-        - env:
+        - name: suumo-scraper
+          image: suumo-scraper
+          imagePullPolicy: IfNotPresent
+          env:
             - name: TZ
               value: Asia/Tokyo
-            - name: MONGO_URI
-              value: mongodb://admin:REDACTED@mongodb.realestate.svc.cluster.local:27017/?authSource=admin
             - name: CRON_SCHEDULE
               value: "*/5 * * * *"
-          image: suumo-scraper
-          name: suumo-scraper
-          imagePullPolicy: IfNotPresent
+            - name: MONGO_URI
+              valueFrom:
+                secretKeyRef:
+                  name: mongodb-creds
+                  key: MONGO_URI
       restartPolicy: Always
-

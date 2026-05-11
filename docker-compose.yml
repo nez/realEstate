@@ -4,15 +4,15 @@ services:
     container_name: mongodb
     restart: always
     environment:
-      MONGO_INITDB_ROOT_USERNAME: admin
-      MONGO_INITDB_ROOT_PASSWORD: REDACTED
-      MONGO_INITDB_DATABASE: suumo
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_INITDB_ROOT_USERNAME:?set MONGO_INITDB_ROOT_USERNAME in .env}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_INITDB_ROOT_PASSWORD:?set MONGO_INITDB_ROOT_PASSWORD in .env}
+      MONGO_INITDB_DATABASE: ${MONGO_INITDB_DATABASE:-suumo}
       TZ: Asia/Tokyo
     ports:
       - 27017:27017
     volumes:
       - ./mongodb/mongo-init.js:/docker-entrypoint-initdb.d/mongo-init.js:ro
-      - ./mongodb/data:/data/db\
+      - ./mongodb/data:/data/db
 
   scraper:
     build:
@@ -23,11 +23,11 @@ services:
     restart: "no"
     environment:
       TZ: Asia/Tokyo
-      MONGO_URI: mongodb://admin:REDACTED@mongodb:27017/?authSource=admin
-      MONGO_DB_NAME: suumo
-      MONGO_COLLECTION_NAME: listings
-      MONGO_COLLECTION_DETAILS: details
-      MONGO_COLLECTION_STATE: scraper_state
-      SCRAPE_MODE: DETAIL  # LISTING or DETAIL
+      MONGO_URI: ${MONGO_URI:?set MONGO_URI in .env}
+      MONGO_DB_NAME: ${MONGO_DB_NAME:-suumo}
+      MONGO_COLLECTION_NAME: ${MONGO_COLLECTION_NAME:-listings}
+      MONGO_COLLECTION_DETAILS: ${MONGO_COLLECTION_DETAILS:-details}
+      MONGO_COLLECTION_STATE: ${MONGO_COLLECTION_STATE:-scraper_state}
+      SCRAPE_MODE: ${SCRAPE_MODE:-LISTING}
     depends_on:
       - mongodb

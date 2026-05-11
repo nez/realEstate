@@ -3,6 +3,14 @@ This repo is for crawl data from some suumo pages, and save it into `mongodb` fo
 ![Screenshot 2024-03-20 135657](https://github.com/Takusei/realEstate/assets/45616321/84d652c7-fbdd-4a07-b513-50af99debd5e)
 
 
+# Setup
+Copy the env templates and fill in real credentials. Both files are gitignored.
+```
+cp .env.example .env
+cp scraper/.env.example scraper/.env
+# edit both to set MONGO_INITDB_ROOT_PASSWORD / MONGO_URI
+```
+
 # Deploy
 ## How to run this in docker?
 ```
@@ -18,7 +26,15 @@ docker build -f ./scraper/docker/Dockerfile -t suumo-scraper:latest ./scraper/. 
 # Load image to minikube if you are using it
 minikube image load suumo-scraper
 
-# The deployment file is created from docker-compose.yaml by `kompose`
+# Create the namespace and secret (see secret.example.yaml for the shape)
+kubectl create namespace realestate
+kubectl create secret generic mongodb-creds -n realestate \
+  --from-literal=MONGO_INITDB_ROOT_USERNAME=admin \
+  --from-literal=MONGO_INITDB_ROOT_PASSWORD='<rotated-password>' \
+  --from-literal=MONGO_INITDB_DATABASE=suumo \
+  --from-literal=MONGO_URI='mongodb://admin:<rotated-password>@mongodb.realestate.svc.cluster.local:27017/?authSource=admin'
+
+# Apply the manifest
 kubectl apply -f deployment.yaml
 
 # Verify it has been deployed
@@ -38,7 +54,7 @@ docker rmi -f $(docker images -aq)
 ```
 
 # Access
-Access mongodb with `mongodb://admin:REDACTED@localhost:27017/suumo?authSource=admin`
+Connect to mongodb with the URI from your `.env` (`mongodb://<user>:<password>@localhost:27017/suumo?authSource=admin`).
 
 ## Note
 For local, docker, k8s, we have to give MONGO_URI different string to get mongodb rui:
