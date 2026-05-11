@@ -3,6 +3,7 @@ import scrapePage from '../lib/scrape'
 import { getNumbers } from '../lib/number'
 import client from '../lib/client'
 import logger from '../lib/logger'
+import { ListingSchema, validate } from '../lib/schemas'
 
 const sleep = async (ms: number) => await new Promise(resolve => setTimeout(resolve, ms))
 
@@ -13,9 +14,12 @@ const crawler = async (): Promise<void> => {
   const listingsCollectionName = process.env.MONGO_COLLECTION_NAME ?? 'listings'
   const stateCollectionName = process.env.MONGO_COLLECTION_STATE ?? 'scraper_state'
 
+  const parseErrorsCollectionName = process.env.MONGO_COLLECTION_PARSE_ERRORS ?? 'parse_errors'
+
   const database = client.db(dbName)
   const listingsCollection = database.collection(listingsCollectionName)
   const stateCollection = database.collection(stateCollectionName)
+  const parseErrorsCollection = database.collection(parseErrorsCollectionName)
 
   let startPage = 1
   const state = await stateCollection.findOne({ stateId: 'crawler' })
@@ -34,14 +38,36 @@ const crawler = async (): Promise<void> => {
         logger.info(`Scraping page ${i} of ${maxPageNumber}...`)
         const data = await scrapePage(process.env.START_PATH + `&pn=${i}`)
         if (data && data.length > 0) {
-          try {
-            await listingsCollection.insertMany(data, { ordered: false })
-            logger.info(`Saved or skipped ${data.length} items from page ${i}.`)
-          } catch (error: any) {
-            if (error.code === 11000) {
-              logger.warn(`Duplicate key error on page ${i}. Items likely already exist.`)
-            } else {
-              throw error
+          const valid: any[] = []
+          const invalid: Array<{ rawDoc: unknown, issues: unknown }> = []
+          for (const item of data) {
+            const result = validate(ListingSchema, item)
+            if (result.ok) valid.push(result.data)
+            else invalid.push({ rawDoc: item, issues: result.issues })
+          }
+
+          if (invalid.length > 0) {
+            logger.warn(`Page ${i}: ${invalid.length}/${data.length} listings failed schema validation`)
+            try {
+              await parseErrorsCollection.insertMany(
+                invalid.map(e => ({ ...e, sourceUrl: (e.rawDoc as any)?.url ?? null, collection: 'listings', observedAt: new Date() })),
+                { ordered: false }
+              )
+            } catch (err: any) {
+              logger.error(`Page ${i}: failed to record parse errors: ${err.message}`)
+            }
+          }
+
+          if (valid.length > 0) {
+            try {
+              await listingsCollection.insertMany(valid, { ordered: false })
+              logger.info(`Page ${i}: inserted/skipped ${valid.length} valid listings.`)
+            } catch (error: any) {
+              if (error.code === 11000) {
+                logger.warn(`Duplicate key error on page ${i}. Items likely already exist.`)
+              } else {
+                throw error
+              }
             }
           }
           await stateCollection.updateOne(

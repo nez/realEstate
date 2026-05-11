@@ -2,6 +2,7 @@ import { JSDOM } from 'jsdom'
 import got from 'got'
 import logger from './logger'
 import { extractPrice, parseSquareMeters } from './parserUtils'
+import { classifyError } from './status'
 
 const userAgents = [
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/109.0.0.0 Safari/537.36',
@@ -9,28 +10,27 @@ const userAgents = [
   'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36'
 ]
 
-const scrapeDetailPage = async (url: string): Promise<Record<string, any> | null> => {
+export type ScrapeResult =
+  | { kind: 'success', data: Record<string, any> }
+  | { kind: 'transient', reason: string }
+  | { kind: 'permanent', reason: string }
+
+const scrapeDetailPage = async (url: string): Promise<ScrapeResult> => {
   const startTime = Date.now()
   const userAgent = userAgents[Math.floor(Math.random() * userAgents.length)]
 
   logger.info(`[DETAIL-START] Fetching: ${url}`)
-  logger.info(`[DETAIL-CONFIG] User-Agent: ${userAgent.substring(0, 50)}...`)
 
-  // Create AbortController for explicit timeout control
   const abortController = new AbortController()
-  const TOTAL_TIMEOUT = 25000 // 25 seconds total timeout
+  const TOTAL_TIMEOUT = 25000
 
-  // Set up a process-level timeout as failsafe
   const timeoutId = setTimeout(() => {
     logger.warn(`[DETAIL-TIMEOUT] Force aborting request after ${TOTAL_TIMEOUT}ms`)
     abortController.abort()
   }, TOTAL_TIMEOUT)
 
+  let responseBody: string
   try {
-    // Step 1: HTTP Request with enhanced timeout and detailed logging
-    logger.info('[DETAIL-HTTP] Starting HTTP request...')
-    logger.info(`[DETAIL-HTTP] Timeout configured: ${TOTAL_TIMEOUT}ms`)
-
     const response = await got(url, {
       signal: abortController.signal,
       headers: {
@@ -43,248 +43,134 @@ const scrapeDetailPage = async (url: string): Promise<Record<string, any> | null
         'Upgrade-Insecure-Requests': '1'
       },
       timeout: {
-        request: 20000, // 20 second total timeout (lower than AbortController)
-        response: 10000, // 10 second response timeout
-        connect: 5000, // 5 second connect timeout
-        lookup: 3000 // 3 second DNS lookup timeout
+        request: 20000,
+        response: 10000,
+        connect: 5000,
+        lookup: 3000
       },
       retry: {
         limit: 2,
         methods: ['GET'],
         statusCodes: [408, 413, 429, 500, 502, 503, 504, 521, 522, 524]
-      },
-      hooks: {
-        beforeRequest: [
-          (options) => {
-            const elapsed = Date.now() - startTime
-            logger.info(`[DETAIL-HTTP] Request starting to: ${options.url} (${elapsed}ms elapsed)`)
-          }
-        ],
-        afterResponse: [
-          (response) => {
-            const responseTime = Date.now() - startTime
-            logger.info(`[DETAIL-HTTP] Response received: ${response.statusCode} (${responseTime}ms)`)
-            logger.info(`[DETAIL-HTTP] Response size: ${(response.body as string).length} bytes`)
-            logger.info(`[DETAIL-HTTP] Content-Type: ${response.headers['content-type']}`)
-            return response
-          }
-        ],
-        beforeError: [
-          (error) => {
-            const elapsed = Date.now() - startTime
-            logger.error(`[DETAIL-HTTP] Request error after ${elapsed}ms: ${error.message}`)
-            return error
-          }
-        ]
       }
     })
-
-    // Clear the timeout since request succeeded
     clearTimeout(timeoutId)
-
-    // Step 2: Response validation
-    logger.info('[DETAIL-VALIDATE] Validating response...')
-    const responseBody = response.body
-    if (!responseBody || responseBody.length < 1000) {
-      logger.warn(`[DETAIL-VALIDATE] Response too small: ${responseBody.length} bytes`)
-      return null
-    }
-
-    if (!responseBody.includes('html') && !responseBody.includes('HTML')) {
-      logger.warn('[DETAIL-VALIDATE] Response doesn\'t appear to be HTML')
-      logger.info(`[DETAIL-VALIDATE] First 200 chars: ${responseBody.substring(0, 200)}`)
-      return null
-    }
-
-    // Step 3: DOM parsing
-    logger.info('[DETAIL-DOM] Parsing HTML with JSDOM...')
-    const dom = new JSDOM(responseBody)
-    const document = dom.window.document
-    logger.info('[DETAIL-DOM] DOM parsed successfully')
-
-    const details: Record<string, any> = {}
-
-    // Helper function to clean extracted values
-    const cleanValue = (value: string): string => {
-      // Remove common extra text patterns
-      return value
-        .replace(/\[\s*[□■]\s*[^\]]+\]/g, '') // Remove [ □支払シミュレーション ] type patterns
-        .replace(/\s+/g, ' ') // Normalize whitespace
-        .trim()
-    }
-
-    // Step 4: Extract data from property tables
-    logger.info('[DETAIL-EXTRACT] Looking for property tables...')
-    const tables = document.querySelectorAll('table.bdclps')
-    logger.info(`[DETAIL-EXTRACT] Found ${tables.length} property tables`)
-
-    let totalFieldsExtracted = 0
-    tables.forEach((table: any, tableIndex: number) => {
-      logger.info(`[DETAIL-EXTRACT] Processing table ${tableIndex + 1}/${tables.length}`)
-      const rows = table.querySelectorAll('tr')
-      logger.info(`[DETAIL-EXTRACT] Table ${tableIndex + 1} has ${rows.length} rows`)
-
-      rows.forEach((row: any, rowIndex: number) => {
-        // Get all th and td elements in the row
-        const headers = row.querySelectorAll('th')
-        const cells = row.querySelectorAll('td')
-
-        // Process each th/td pair
-        for (let i = 0; i < headers.length; i++) {
-          const th = headers[i]
-          const td = cells[i]
-
-          if (th && td && th.textContent && td.textContent) {
-            // Clean the key - remove hints and extra whitespace
-            let key = th.textContent.trim()
-            // Remove the hint text if present
-            key = key.replace(/ヒント/g, '').trim()
-
-            // Clean the value
-            let value = td.textContent.trim()
-            value = cleanValue(value)
-
-            // Only add if key is not empty and we don't already have this key
-            if (key && key.length > 0 && !details[key]) {
-              details[key] = value
-              totalFieldsExtracted++
-              if (totalFieldsExtracted <= 5) { // Log first 5 fields for debugging
-                logger.info(`[DETAIL-EXTRACT] Field: "${key}" = "${value.substring(0, 50)}${value.length > 50 ? '...' : ''}"`)
-              }
-            }
-          }
-        }
-      })
-    })
-
-    logger.info(`[DETAIL-EXTRACT] Extracted ${totalFieldsExtracted} fields from tables`)
-
-    // Step 5: Extract images
-    logger.info('[DETAIL-IMAGES] Extracting images...')
-    const images: string[] = []
-    const imgElements = document.querySelectorAll('img')
-    logger.info(`[DETAIL-IMAGES] Found ${imgElements.length} img elements`)
-
-    imgElements.forEach((img: any) => {
-      // Look for the 'rel' attribute first (high quality images), then 'src'
-      const imgUrl = img.getAttribute('rel') || img.getAttribute('src')
-      if (imgUrl &&
-          !imgUrl.includes('spacer.gif') &&
-          !imgUrl.includes('logo') &&
-          !imgUrl.includes('btn.gif') &&
-          imgUrl.startsWith('http')) {
-        // Avoid duplicates
-        if (!images.includes(imgUrl)) {
-          images.push(imgUrl)
-        }
-      }
-    })
-    details.images = images
-    logger.info(`[DETAIL-IMAGES] Extracted ${images.length} valid images`)
-
-    // Step 6: Extract features
-    logger.info('[DETAIL-FEATURES] Looking for features section...')
-    const featuresSection = Array.from(document.querySelectorAll('h3')).find((h3: any) =>
-      h3.textContent?.includes('特徴ピックアップ')
-    )
-    if (featuresSection) {
-      const nextEl = featuresSection.nextElementSibling
-      if (nextEl && nextEl.textContent) {
-        const featuresText = nextEl.textContent.trim()
-        details.features = featuresText.split(/\s*\/\s*/).filter((f: string) => f.length > 0)
-        logger.info(`[DETAIL-FEATURES] Extracted ${details.features.length} features`)
-      }
-    } else {
-      logger.info('[DETAIL-FEATURES] No features section found')
-    }
-
-    // Step 7: Extract seller's comment
-    logger.info('[DETAIL-DESCRIPTION] Looking for seller\'s comment...')
-    const sellerCommentSection = Array.from(document.querySelectorAll('h3')).find((h3: any) =>
-      h3.textContent?.includes('売主コメント')
-    )
-    if (sellerCommentSection) {
-      // Look for the comment text in the following structure
-      const parent = sellerCommentSection.parentElement
-      if (parent) {
-        const commentDiv = parent.nextElementSibling
-        if (commentDiv) {
-          const bwDiv = commentDiv.querySelector('.bw')
-          if (bwDiv && bwDiv.textContent) {
-            details.description = bwDiv.textContent.trim()
-            logger.info(`[DETAIL-DESCRIPTION] Extracted description: ${details.description.substring(0, 100)}...`)
-          }
-        }
-      }
-    } else {
-      logger.info('[DETAIL-DESCRIPTION] No seller\'s comment found')
-    }
-
-    // Step 8: Add computed fields
-    logger.info('[DETAIL-COMPUTE] Adding computed fields...')
-    if (details['価格']) {
-      const { salePriceYen, rentPriceYen } = extractPrice(details['価格'])
-      details.salePriceYen = salePriceYen
-      details.rentPriceYen = rentPriceYen
-      logger.info(`[DETAIL-COMPUTE] Price computed - Sale: ${salePriceYen}, Rent: ${rentPriceYen}`)
-    }
-
-    if (details['専有面積']) {
-      details.sizeM2 = parseSquareMeters(details['専有面積'])
-      logger.info(`[DETAIL-COMPUTE] Size computed: ${details.sizeM2}m²`)
-    }
-
-    // Step 9: Add metadata
-    details.scrapedAt = new Date()
-    details.url = url
-
-    // Store full HTML while we're still validating parser coverage. Flip STORE_HTML=false
-    // once the structured fields are trusted; drops a large blob per row.
-    if (process.env.STORE_HTML !== 'false') {
-      details.html = responseBody
-    }
-
-    // Extract listing ID from URL
-    const urlMatch = url.match(/nc_(\d+)/)
-    if (urlMatch) {
-      details.listingId = urlMatch[1]
-      logger.info(`[DETAIL-METADATA] Extracted listing ID: ${details.listingId}`)
-    }
-
-    const totalTime = Date.now() - startTime
-    logger.info(`[DETAIL-SUCCESS] Completed successfully in ${totalTime}ms`)
-    logger.info(`[DETAIL-SUCCESS] Total fields extracted: ${Object.keys(details).length}`)
-
-    return details
+    responseBody = response.body
+    logger.info(`[DETAIL-HTTP] ${response.statusCode} (${response.body.length}B, ${Date.now() - startTime}ms)`)
   } catch (error: any) {
-    // Always clear the timeout
     clearTimeout(timeoutId)
-
-    const totalTime = Date.now() - startTime
-    logger.error(`[DETAIL-ERROR] Failed after ${totalTime}ms for URL: ${url}`)
-    logger.error(`[DETAIL-ERROR] Error type: ${error.constructor.name}`)
-    logger.error(`[DETAIL-ERROR] Error message: ${error.message}`)
-
-    if (error.code) {
-      logger.error(`[DETAIL-ERROR] Error code: ${error.code}`)
-    }
-
-    if (error.response) {
-      logger.error(`[DETAIL-ERROR] HTTP status: ${error.response.statusCode}`)
-      logger.error(`[DETAIL-ERROR] Response headers: ${JSON.stringify(error.response.headers)}`)
-    }
-
-    if (error.name === 'TimeoutError' || error.name === 'AbortError') {
-      logger.error('[DETAIL-ERROR] Request timed out - this may indicate network issues or rate limiting')
-    }
-
-    if (error.name === 'RequestError') {
-      logger.error('[DETAIL-ERROR] Request failed - network or connectivity issue')
-    }
-
-    logger.error(`[DETAIL-ERROR] Full error: ${error}`)
-    return null
+    const kind = classifyError(error)
+    const reason = `${error.constructor?.name ?? 'Error'}: ${error.message ?? String(error)}` +
+      (error.response?.statusCode ? ` [HTTP ${error.response.statusCode}]` : '')
+    logger.error(`[DETAIL-${kind.toUpperCase()}] ${reason}`)
+    return { kind, reason }
   }
+
+  // Response sanity: too small or non-HTML → likely a block/CAPTCHA page. Treat as transient.
+  if (!responseBody || responseBody.length < 1000) {
+    const reason = `response too small (${responseBody?.length ?? 0} bytes)`
+    logger.warn(`[DETAIL-TRANSIENT] ${reason}`)
+    return { kind: 'transient', reason }
+  }
+  if (!responseBody.includes('html') && !responseBody.includes('HTML')) {
+    logger.warn('[DETAIL-TRANSIENT] response does not look like HTML')
+    return { kind: 'transient', reason: 'response not HTML' }
+  }
+
+  const dom = new JSDOM(responseBody)
+  const document = dom.window.document
+  const details: Record<string, any> = {}
+
+  const cleanValue = (value: string): string =>
+    value
+      .replace(/\[\s*[□■]\s*[^\]]+\]/g, '')
+      .replace(/\s+/g, ' ')
+      .trim()
+
+  const tables = document.querySelectorAll('table.bdclps')
+  let totalFieldsExtracted = 0
+  tables.forEach((table: any) => {
+    const rows = table.querySelectorAll('tr')
+    rows.forEach((row: any) => {
+      const headers = row.querySelectorAll('th')
+      const cells = row.querySelectorAll('td')
+      for (let i = 0; i < headers.length; i++) {
+        const th = headers[i]
+        const td = cells[i]
+        if (th?.textContent && td?.textContent) {
+          const key = th.textContent.trim().replace(/ヒント/g, '').trim()
+          const value = cleanValue(td.textContent.trim())
+          if (key.length > 0 && !details[key]) {
+            details[key] = value
+            totalFieldsExtracted++
+          }
+        }
+      }
+    })
+  })
+  logger.info(`[DETAIL-EXTRACT] ${totalFieldsExtracted} fields from ${tables.length} tables`)
+
+  // Zero tables on a non-trivial HTML page almost always means we hit a block page.
+  // Hand it back as transient so the backoff machinery gets another shot later.
+  if (totalFieldsExtracted === 0) {
+    return { kind: 'transient', reason: 'parser extracted 0 fields (possible block page)' }
+  }
+
+  const images: string[] = []
+  document.querySelectorAll('img').forEach((img: any) => {
+    const imgUrl = img.getAttribute('rel') ?? img.getAttribute('src')
+    if (
+      imgUrl &&
+      !imgUrl.includes('spacer.gif') &&
+      !imgUrl.includes('logo') &&
+      !imgUrl.includes('btn.gif') &&
+      imgUrl.startsWith('http') &&
+      !images.includes(imgUrl)
+    ) {
+      images.push(imgUrl)
+    }
+  })
+  details.images = images
+
+  const featuresSection = Array.from(document.querySelectorAll('h3')).find((h3: any) =>
+    h3.textContent?.includes('特徴ピックアップ')
+  )
+  if (featuresSection?.nextElementSibling?.textContent) {
+    details.features = featuresSection.nextElementSibling.textContent.trim()
+      .split(/\s*\/\s*/).filter((f: string) => f.length > 0)
+  }
+
+  const sellerCommentSection = Array.from(document.querySelectorAll('h3')).find((h3: any) =>
+    h3.textContent?.includes('売主コメント')
+  )
+  const commentBw = sellerCommentSection?.parentElement?.nextElementSibling?.querySelector('.bw')
+  if (commentBw?.textContent) {
+    details.description = commentBw.textContent.trim()
+  }
+
+  if (details['価格']) {
+    const { salePriceYen, rentPriceYen } = extractPrice(details['価格'])
+    details.salePriceYen = salePriceYen
+    details.rentPriceYen = rentPriceYen
+  }
+  if (details['専有面積']) {
+    details.sizeM2 = parseSquareMeters(details['専有面積'])
+  }
+
+  details.scrapedAt = new Date()
+  details.url = url
+
+  if (process.env.STORE_HTML !== 'false') {
+    details.html = responseBody
+  }
+
+  const urlMatch = url.match(/nc_(\d+)/)
+  if (urlMatch) {
+    details.listingId = urlMatch[1]
+  }
+
+  logger.info(`[DETAIL-SUCCESS] ${Object.keys(details).length} fields in ${Date.now() - startTime}ms`)
+  return { kind: 'success', data: details }
 }
 
 export default scrapeDetailPage

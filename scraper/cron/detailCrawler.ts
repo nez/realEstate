@@ -1,230 +1,190 @@
+import type { Collection } from 'mongodb'
 import client from '../lib/client'
 import logger from '../lib/logger'
-import scrapeDetailPage from '../lib/scrapeDetail'
+import scrapeDetailPage, { type ScrapeResult } from '../lib/scrapeDetail'
+import { DetailSchema, validate } from '../lib/schemas'
+import {
+  type OutcomePatch,
+  eligibleForDetailScrape,
+  permanentErrorPatch,
+  successPatch,
+  transientErrorPatch
+} from '../lib/status'
 
 const sleep = async (ms: number) => await new Promise(resolve => setTimeout(resolve, ms))
+
+const BATCH_SIZE = 20
+const REQUEST_DELAY_RANGE_MS = [2000, 3000] as const
+
+const applyOutcome = async (
+  listingsCollection: Collection,
+  listingId: unknown,
+  patch: OutcomePatch
+): Promise<void> => {
+  await listingsCollection.updateOne({ _id: listingId as any }, patch as any)
+}
+
+const recordParseError = async (
+  parseErrorsCollection: Collection,
+  payload: {
+    listingId: unknown
+    sourceUrl: string
+    rawDoc: unknown
+    issues: unknown
+    collection: 'listings' | 'details'
+  }
+): Promise<void> => {
+  try {
+    await parseErrorsCollection.insertOne({ ...payload, observedAt: new Date() })
+  } catch (err: any) {
+    logger.error(`[PARSE-ERROR-STORE] failed to record parse error: ${err.message}`)
+  }
+}
+
+const handleResult = async (
+  result: ScrapeResult,
+  doc: any,
+  collections: {
+    listings: Collection
+    details: Collection
+    parseErrors: Collection
+  }
+): Promise<'success' | 'error'> => {
+  if (result.kind === 'transient') {
+    await applyOutcome(collections.listings, doc._id, transientErrorPatch(result.reason, doc.attempts ?? 0))
+    return 'error'
+  }
+
+  if (result.kind === 'permanent') {
+    await applyOutcome(collections.listings, doc._id, permanentErrorPatch(result.reason))
+    return 'error'
+  }
+
+  const validated = validate(DetailSchema, result.data)
+  if (!validated.ok) {
+    logger.warn(`[VALIDATE] detail for ${doc.url} failed schema (${validated.issues.length} issues)`)
+    await recordParseError(collections.parseErrors, {
+      listingId: doc._id,
+      sourceUrl: doc.url,
+      rawDoc: result.data,
+      issues: validated.issues,
+      collection: 'details'
+    })
+    await applyOutcome(collections.listings, doc._id, permanentErrorPatch('detail schema validation failed'))
+    return 'error'
+  }
+
+  try {
+    await collections.details.insertOne(validated.data as any)
+    await applyOutcome(collections.listings, doc._id, successPatch())
+    return 'success'
+  } catch (err: any) {
+    // A duplicate detail row (e.g. re-scrape of an already-saved listing) is harmless;
+    // mark the listing successful so we don't retry forever.
+    if (err.code === 11000) {
+      await applyOutcome(collections.listings, doc._id, successPatch())
+      return 'success'
+    }
+    logger.error(`[SAVE] failed to insert detail for ${doc.url}: ${err.message}`)
+    await applyOutcome(
+      collections.listings,
+      doc._id,
+      transientErrorPatch(`mongo insert failed: ${err.message}`, doc.attempts ?? 0)
+    )
+    return 'error'
+  }
+}
 
 const detailCrawler = async (): Promise<void> => {
   const startTime = Date.now()
   logger.info('='.repeat(50))
-  logger.info('🚀 DETAIL CRAWLER STARTING')
+  logger.info('DETAIL CRAWLER STARTING')
   logger.info('='.repeat(50))
+
+  const dbName = process.env.MONGO_DB_NAME ?? 'suumo'
+  const listingsCollectionName = process.env.MONGO_COLLECTION_NAME ?? 'listings'
+  const detailsCollectionName = process.env.MONGO_COLLECTION_DETAILS ?? 'details'
+  const parseErrorsCollectionName = process.env.MONGO_COLLECTION_PARSE_ERRORS ?? 'parse_errors'
+
+  const database = client.db(dbName)
+  const collections = {
+    listings: database.collection(listingsCollectionName),
+    details: database.collection(detailsCollectionName),
+    parseErrors: database.collection(parseErrorsCollectionName)
+  }
 
   let processedCount = 0
   let successCount = 0
   let errorCount = 0
   let batchNumber = 0
-  const BATCH_SIZE = 20 // Process 20 documents at a time to avoid cursor timeout
 
   try {
-    const dbName = process.env.MONGO_DB_NAME ?? 'suumo'
-    const listingsCollectionName = process.env.MONGO_COLLECTION_NAME ?? 'listings'
-    const detailsCollectionName = process.env.MONGO_COLLECTION_DETAILS ?? 'details'
-
-    logger.info('📊 Configuration:')
-    logger.info(`   Database: '${dbName}'`)
-    logger.info(`   Source Collection: '${listingsCollectionName}'`)
-    logger.info(`   Target Collection: '${detailsCollectionName}'`)
-    logger.info(`   Batch Size: ${BATCH_SIZE} documents`)
-
-    const database = client.db(dbName)
-    const listingsCollection = database.collection(listingsCollectionName)
-    const detailsCollection = database.collection(detailsCollectionName)
-
-    // Get initial counts for progress tracking
-    let totalCount = await listingsCollection.countDocuments({ scraped: { $ne: true } })
-    const scrapedCount = await listingsCollection.countDocuments({ scraped: true })
-    const totalListings = await listingsCollection.countDocuments({})
-
-    logger.info('📈 Initial Progress Status:')
-    logger.info(`   Total listings: ${totalListings}`)
-    logger.info(`   Already scraped: ${scrapedCount}`)
-    logger.info(`   Remaining to scrape: ${totalCount}`)
-    logger.info(`   Progress: ${((scrapedCount / totalListings) * 100).toFixed(1)}%`)
-
-    if (totalCount === 0) {
-      logger.info('✅ No unscraped documents found. Detail crawler has nothing to do.')
+    let pending = await collections.listings.countDocuments(eligibleForDetailScrape())
+    const totalListings = await collections.listings.countDocuments({})
+    logger.info(`[PROGRESS] eligible=${pending} total=${totalListings}`)
+    if (pending === 0) {
+      logger.info('No eligible listings. Exiting.')
       return
     }
 
-    // Process documents in batches to avoid cursor timeout
-    while (totalCount > 0) {
+    while (pending > 0) {
       batchNumber++
-      logger.info(`\n🔄 Starting Batch ${batchNumber} (${BATCH_SIZE} documents max)`)
+      const batch = await collections.listings
+        .find(eligibleForDetailScrape())
+        .sort({ attempts: 1, _id: 1 })
+        .limit(BATCH_SIZE)
+        .toArray()
 
-      let batch: any[] = []
+      if (batch.length === 0) break
+      logger.info(`[BATCH ${batchNumber}] picked up ${batch.length} listings`)
 
-      try {
-        // Get a fresh batch of unscraped documents
-        batch = await listingsCollection
-          .find({ scraped: { $ne: true } })
-          .limit(BATCH_SIZE)
-          .toArray()
-
-        logger.info(`📦 Batch ${batchNumber}: Retrieved ${batch.length} documents`)
-
-        if (batch.length === 0) {
-          logger.info('✅ No more unscraped documents found. Batch processing complete.')
-          break
-        }
-      } catch (batchError: any) {
-        logger.error(`❌ Error retrieving batch ${batchNumber}: ${batchError.message}`)
-        logger.error('   Will retry next batch in 10 seconds...')
-        await sleep(10000)
-        continue
-      }
-
-      // Process each document in the current batch
       for (let i = 0; i < batch.length; i++) {
         const doc = batch[i]
         processedCount++
 
-        const progress = ((processedCount / totalCount) * 100).toFixed(1)
-        const elapsed = Date.now() - startTime
-        const avgTimePerDoc = elapsed / processedCount
-        const estimatedRemaining = Math.round((totalCount - processedCount) * avgTimePerDoc / 1000 / 60)
-
-        logger.info(`\n📍 [Batch ${batchNumber}] [${i + 1}/${batch.length}] [Total: ${processedCount}] Processing...`)
-        logger.info(`   ID: ${doc._id}`)
-        logger.info(`   Name: ${doc.name || 'Unknown'}`)
-        logger.info(`   Overall Progress: ${progress}%`)
-        logger.info(`   Estimated time remaining: ${estimatedRemaining} minutes`)
-
-        // Skip documents without URL
         if (!doc.url) {
-          logger.warn(`⚠️  Document with _id: ${doc._id} has no URL. Skipping.`)
+          await applyOutcome(collections.listings, doc._id, permanentErrorPatch('No URL on listing'))
           errorCount++
-
-          try {
-            // Mark as scraped even though it failed, so we don't keep retrying
-            await listingsCollection.updateOne(
-              { _id: doc._id },
-              { $set: { scraped: true, scrapedAt: new Date(), error: 'No URL found' } }
-            )
-            logger.info('   Marked document as scraped (with error) to avoid reprocessing')
-          } catch (updateError: any) {
-            logger.error(`   Failed to mark document as scraped: ${updateError.message}`)
-          }
-
           continue
         }
 
-        logger.info(`🌐 Starting scrape for: ${doc.url}`)
-        const scrapeStartTime = Date.now()
-
+        logger.info(`[${processedCount}] scraping ${doc.url}`)
+        let result: ScrapeResult
         try {
-          const detailData = await scrapeDetailPage(doc.url)
-          const scrapeTime = Date.now() - scrapeStartTime
-
-          if (detailData) {
-            // scrapeDetail.ts already sets detailData.listingId from the URL's nc_<id>.
-            // Don't overwrite it with doc._id — legacy listings have URLs as _id, new ones have numeric IDs.
-
-            logger.info(`💾 Saving scraped data... (scraped in ${scrapeTime}ms)`)
-
-            try {
-              await detailsCollection.insertOne(detailData)
-              await listingsCollection.updateOne(
-                { _id: doc._id },
-                { $set: { scraped: true, scrapedAt: new Date() } }
-              )
-
-              logger.info('✅ Successfully saved details and marked as scraped')
-              logger.info(`   Fields extracted: ${Object.keys(detailData).length}`)
-              logger.info(`   Images found: ${detailData.images?.length || 0}`)
-              successCount++
-            } catch (saveError: any) {
-              logger.error(`❌ Failed to save scraped data: ${saveError.message}`)
-              logger.error('   Will continue with next document...')
-              errorCount++
-            }
-          } else {
-            logger.error(`❌ Failed to scrape details for: ${doc.name} (${doc.url})`)
-            logger.error(`   Scraping returned null after ${scrapeTime}ms`)
-            errorCount++
-
-            try {
-              // Mark as scraped with error to avoid infinite retries
-              await listingsCollection.updateOne(
-                { _id: doc._id },
-                { $set: { scraped: true, scrapedAt: new Date(), error: 'Scraping returned null' } }
-              )
-              logger.info('   Marked as scraped (with error) to avoid reprocessing')
-            } catch (updateError: any) {
-              logger.error(`   Failed to mark document as scraped: ${updateError.message}`)
-            }
-          }
-        } catch (scrapeError: any) {
-          const scrapeTime = Date.now() - scrapeStartTime
-          logger.error(`💥 Exception while scraping: ${doc.name} (${doc.url})`)
-          logger.error(`   Error after ${scrapeTime}ms: ${scrapeError.message}`)
-          logger.error(`   Error type: ${scrapeError.constructor.name}`)
+          result = await scrapeDetailPage(doc.url)
+        } catch (err: any) {
+          // scrapeDetailPage shouldn't throw post-refactor, but belt-and-braces.
+          logger.error(`[UNEXPECTED] scrapeDetailPage threw: ${err.message}`)
+          await applyOutcome(
+            collections.listings,
+            doc._id,
+            transientErrorPatch(`unexpected error: ${err.message}`, doc.attempts ?? 0)
+          )
           errorCount++
-
-          try {
-            // Mark as scraped with error to avoid infinite retries
-            await listingsCollection.updateOne(
-              { _id: doc._id },
-              { $set: { scraped: true, scrapedAt: new Date(), error: scrapeError.message } }
-            )
-            logger.info('   Marked as scraped (with error) to avoid reprocessing')
-          } catch (updateError: any) {
-            logger.error(`   Failed to mark document as scraped: ${updateError.message}`)
-          }
+          continue
         }
 
-        // Respect rate limiting - sleep 2-3 seconds between requests
-        if (i < batch.length - 1) { // Don't sleep after the last item in batch
-          const sleepTime = Math.floor(Math.random() * 1000) + 2000 // 2-3 seconds
-          logger.info(`😴 Sleeping for ${sleepTime}ms before next request...`)
-          await sleep(sleepTime)
+        const outcome = await handleResult(result, doc, collections)
+        if (outcome === 'success') successCount++
+        else errorCount++
+
+        if (i < batch.length - 1) {
+          const [lo, hi] = REQUEST_DELAY_RANGE_MS
+          await sleep(Math.floor(Math.random() * (hi - lo)) + lo)
         }
       }
 
-      // Update count for next batch
-      try {
-        const newCount = await listingsCollection.countDocuments({ scraped: { $ne: true } })
-        logger.info(`📊 Batch ${batchNumber} completed. Remaining documents: ${newCount}`)
-        totalCount = newCount
-
-        if (totalCount > 0) {
-          logger.info('⏸️  Brief pause between batches...')
-          await sleep(2000) // Brief pause between batches
-        }
-      } catch (countError: any) {
-        logger.error(`❌ Error getting updated count: ${countError.message}`)
-        logger.error('   Will continue with next batch anyway...')
-        await sleep(5000)
-      }
+      pending = await collections.listings.countDocuments(eligibleForDetailScrape())
+      if (pending > 0) await sleep(2000)
     }
 
-    const totalTime = Date.now() - startTime
-    const totalMinutes = Math.round(totalTime / 1000 / 60)
-
-    logger.info('\n' + '='.repeat(50))
-    logger.info('🏁 DETAIL CRAWLER FINISHED')
+    const totalMin = Math.round((Date.now() - startTime) / 60_000)
     logger.info('='.repeat(50))
-    logger.info('📊 Final Statistics:')
-    logger.info(`   Batches processed: ${batchNumber}`)
-    logger.info(`   Total processed: ${processedCount}`)
-    logger.info(`   Successful: ${successCount}`)
-    logger.info(`   Errors: ${errorCount}`)
-    logger.info(`   Success rate: ${processedCount > 0 ? ((successCount / processedCount) * 100).toFixed(1) : 0}%`)
-    logger.info(`   Total time: ${totalMinutes} minutes`)
-    logger.info(`   Average time per listing: ${processedCount > 0 ? Math.round(totalTime / processedCount / 1000) : 0} seconds`)
+    logger.info(`DETAIL CRAWLER FINISHED: batches=${batchNumber} processed=${processedCount} success=${successCount} errors=${errorCount} duration=${totalMin}m`)
+    logger.info('='.repeat(50))
   } catch (error: any) {
-    const totalTime = Date.now() - startTime
-    logger.error('\n' + '='.repeat(50))
-    logger.error('💥 DETAIL CRAWLER FATAL ERROR')
-    logger.error('='.repeat(50))
-    logger.error(`Error after ${Math.round(totalTime / 1000 / 60)} minutes: ${error.message}`)
-    logger.error(`Error type: ${error.constructor.name}`)
-    logger.error(`Processed so far: ${processedCount} (${successCount} successful, ${errorCount} errors)`)
-    logger.error(`Full error: ${error}`)
-    logger.error(`Stack trace: ${error.stack}`)
-
-    // Don't throw - let it exit gracefully with the statistics we have
-    logger.error('🛑 Exiting gracefully despite fatal error')
+    logger.error(`[FATAL] ${error.constructor.name}: ${error.message}`)
+    logger.error(`processed=${processedCount} success=${successCount} errors=${errorCount}`)
   }
 }
 
