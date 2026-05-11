@@ -1,5 +1,5 @@
 # Use the official Bun image
-FROM oven/bun:latest
+FROM oven/bun:1.3
 
 # Set the Docker working directory as /usr/src/app
 WORKDIR /usr/src/app
