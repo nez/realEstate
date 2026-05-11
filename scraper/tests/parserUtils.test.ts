@@ -37,4 +37,20 @@ describe('parseSquareMeters', () => {
   test('handles empty input', () => {
     expect(parseSquareMeters('')).toBeNull()
   })
+
+  test('rejects implausibly large 専有面積 values (broker data errors)', () => {
+    // A real-world Suumo listing claimed 専有面積=818.79m² for a 1LDK; this
+    // poisoned the ¥/m² ranking until we added a plausibility filter.
+    expect(parseSquareMeters('専有面積： 818.79m2（壁芯） 間取り： 1LDK')).toBeNull()
+    expect(parseSquareMeters('501m2')).toBeNull()
+  })
+
+  test('rejects values too small to be a residence', () => {
+    expect(parseSquareMeters('4.5m2')).toBeNull()
+  })
+
+  test('accepts the boundary values', () => {
+    expect(parseSquareMeters('5m2')).toBe(5)
+    expect(parseSquareMeters('500m2')).toBe(500)
+  })
 })

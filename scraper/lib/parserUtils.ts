@@ -76,15 +76,29 @@ export const extractPrice = (priceStr: string): { salePriceYen: number | null, r
   return result
 }
 
+// Plausible residential unit floor area for a Suumo listing. Anything outside
+// this range is almost certainly a data error on the broker's side (we have
+// observed e.g. a 1LDK published with 専有面積=818.79m², which is internally
+// inconsistent — the building total leaked into the unit field). Returning
+// null in those cases keeps the listing in the dataset but excludes it from
+// ¥/m² ranking and from any --min-size / --max-pp-m2 query filter.
+const MIN_PLAUSIBLE_M2 = 5
+const MAX_PLAUSIBLE_M2 = 500
+
 export const parseSquareMeters = (sizeStr: string): number | null => {
   try {
     if (!sizeStr) return null
 
     const match = sizeStr.match(/(\d+(\.\d+)?)\s*m2/i)
-    if (match && match[1]) {
-      return parseFloat(match[1])
+    if (!match || !match[1]) return null
+
+    const value = parseFloat(match[1])
+    if (!Number.isFinite(value)) return null
+    if (value < MIN_PLAUSIBLE_M2 || value > MAX_PLAUSIBLE_M2) {
+      logger.warn(`Implausible 専有面積 in listing (${value}m²); dropping. Raw: ${sizeStr.slice(0, 100)}`)
+      return null
     }
-    return null
+    return value
   } catch (error) {
     logger.warn(`Could not parse square meters: ${sizeStr}`)
     return null
