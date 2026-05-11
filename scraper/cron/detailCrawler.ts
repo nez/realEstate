@@ -118,7 +118,8 @@ const detailCrawler = async (): Promise<void> => {
           const scrapeTime = Date.now() - scrapeStartTime
 
           if (detailData) {
-            detailData.listingId = doc._id
+            // scrapeDetail.ts already sets detailData.listingId from the URL's nc_<id>.
+            // Don't overwrite it with doc._id — legacy listings have URLs as _id, new ones have numeric IDs.
 
             logger.info(`💾 Saving scraped data... (scraped in ${scrapeTime}ms)`)
 

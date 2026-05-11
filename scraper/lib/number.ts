@@ -15,15 +15,11 @@ const getItemNumber = (document: any): number => {
 }
 
 const getMaxPageNumber = (document: any): number => {
-  let maxPageNumber = 0
-
   const maxPageLinkElement = document.querySelector('.pagination-parts li:last-child a')
-  const maxPageLinkHref = maxPageLinkElement.getAttribute('href')
-  const maxPageNumberMatch: string[] | null = maxPageLinkHref.match(/pn=(\d+)/)
-  if (maxPageNumberMatch !== null) {
-    maxPageNumber = parseInt(maxPageNumberMatch[1])
-  }
-  return maxPageNumber
+  const maxPageLinkHref = maxPageLinkElement?.getAttribute('href') ?? ''
+  const maxPageNumberMatch = maxPageLinkHref.match(/pn=(\d+)/)
+  if (maxPageNumberMatch === null) return 0
+  return parseInt(maxPageNumberMatch[1], 10)
 }
 
 const getNumbers = async (): Promise<{ totalItems: number, maxPageNumber: number }> => {

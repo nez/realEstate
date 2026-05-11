@@ -61,36 +61,69 @@ spec:
       restartPolicy: Always
 
 ---
-apiVersion: apps/v1
-kind: Deployment
+# Listing crawler: discovers properties from index pages. Runs nightly.
+apiVersion: batch/v1
+kind: CronJob
 metadata:
-  labels:
-    io.kompose.service: scraper
-  name: scraper
+  name: scraper-listing
   namespace: realestate
 spec:
-  replicas: 1
-  selector:
-    matchLabels:
-      io.kompose.service: scraper
-  template:
-    metadata:
-      labels:
-        io.kompose.network/realestate-default: "true"
-        io.kompose.service: scraper
+  schedule: "0 23 * * *"
+  timeZone: Asia/Tokyo
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
     spec:
-      containers:
-        - name: suumo-scraper
-          image: suumo-scraper
-          imagePullPolicy: IfNotPresent
-          env:
-            - name: TZ
-              value: Asia/Tokyo
-            - name: CRON_SCHEDULE
-              value: "*/5 * * * *"
-            - name: MONGO_URI
-              valueFrom:
-                secretKeyRef:
-                  name: mongodb-creds
-                  key: MONGO_URI
-      restartPolicy: Always
+      backoffLimit: 2
+      template:
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: suumo-scraper
+              image: suumo-scraper
+              imagePullPolicy: IfNotPresent
+              env:
+                - name: TZ
+                  value: Asia/Tokyo
+                - name: SCRAPE_MODE
+                  value: LISTING
+                - name: MONGO_URI
+                  valueFrom:
+                    secretKeyRef:
+                      name: mongodb-creds
+                      key: MONGO_URI
+
+---
+# Detail crawler: fills in details for unscraped listings. Runs frequently.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: scraper-detail
+  namespace: realestate
+spec:
+  schedule: "*/5 * * * *"
+  timeZone: Asia/Tokyo
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      template:
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: suumo-scraper
+              image: suumo-scraper
+              imagePullPolicy: IfNotPresent
+              env:
+                - name: TZ
+                  value: Asia/Tokyo
+                - name: SCRAPE_MODE
+                  value: DETAIL
+                - name: MONGO_URI
+                  valueFrom:
+                    secretKeyRef:
+                      name: mongodb-creds
+                      key: MONGO_URI
