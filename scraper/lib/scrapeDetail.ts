@@ -31,6 +31,10 @@ export const parseDetailHtml = (html: string, url: string): ScrapeResult => {
   const tables = document.querySelectorAll('table.bdclps')
   let totalFieldsExtracted = 0
   tables.forEach((table: Element) => {
+    // Suumo's contact / inquiry form uses table.bdclps too — its rows have
+    // `<th>お名前</th><td>...</td>` etc. and would leak into the detail doc
+    // as bogus fields. Anything inside a <form> is not property data.
+    if (table.closest('form') !== null) return
     table.querySelectorAll('tr').forEach((row: Element) => {
       const headers = row.querySelectorAll('th')
       const cells = row.querySelectorAll('td')

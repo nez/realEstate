@@ -2,9 +2,9 @@ import logger from './logger'
 
 /**
  * Converts a Japanese number string containing 億 and/or 万 into a number.
- * Correctly handles composite numbers like "1億5000万".
+ * Correctly handles composites like "1億5000万", "1万1000円", or plain "8500円".
  */
-const toYen = (raw: string): number | null => {
+export const toYen = (raw: string): number | null => {
   if (!raw) return null
   try {
     let yen = 0
@@ -12,22 +12,22 @@ const toYen = (raw: string): number | null => {
 
     const okuIndex = remainingStr.indexOf('億')
     if (okuIndex !== -1) {
-      const okuPart = remainingStr.substring(0, okuIndex)
-      yen += parseFloat(okuPart) * 100000000
+      yen += parseFloat(remainingStr.substring(0, okuIndex)) * 100_000_000
       remainingStr = remainingStr.substring(okuIndex + 1)
     }
 
     const manIndex = remainingStr.indexOf('万')
     if (manIndex !== -1) {
-      const manPart = remainingStr.substring(0, manIndex)
-      yen += parseFloat(manPart) * 10000
+      yen += parseFloat(remainingStr.substring(0, manIndex)) * 10_000
       remainingStr = remainingStr.substring(manIndex + 1)
     }
 
-    // If there were no kanji, parse the whole string
-    if (okuIndex === -1 && manIndex === -1) {
-      const plainVal = parseFloat(remainingStr)
-      if (!isNaN(plainVal)) yen = plainVal
+    // Any digits left over after stripping kanji are plain yen — handles
+    // both "1万1000円" (remainder=1000) and "8500円" (no kanji at all).
+    const tailMatch = remainingStr.match(/\d+(\.\d+)?/)
+    if (tailMatch) {
+      const tail = parseFloat(tailMatch[0])
+      if (!isNaN(tail)) yen += tail
     }
 
     return yen > 0 ? Math.round(yen) : null
@@ -90,7 +90,7 @@ export const parseSquareMeters = (sizeStr: string): number | null => {
     if (!sizeStr) return null
 
     const match = sizeStr.match(/(\d+(\.\d+)?)\s*m2/i)
-    if (!match || !match[1]) return null
+    if (!match?.[1]) return null
 
     const value = parseFloat(match[1])
     if (!Number.isFinite(value)) return null

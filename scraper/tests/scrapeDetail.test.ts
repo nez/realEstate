@@ -86,4 +86,15 @@ describe('parseDetailHtml (detail parser)', () => {
     const validation = validate(DetailSchema, result.data)
     expect(validation.ok).toBe(true)
   })
+
+  test('skips contact-form table rows that share the bdclps class', () => {
+    // The fixture has an inquiry form whose table.bdclps would otherwise
+    // contribute お名前 / メールアドレス / 電話番号 / ご住所 as bogus fields.
+    const result = parseDetailHtml(detailHtml, detailUrl)
+    if (result.kind !== 'success') throw new Error('expected success')
+    expect(result.data['お名前']).toBeUndefined()
+    expect(result.data['メールアドレス']).toBeUndefined()
+    expect(result.data['電話番号']).toBeUndefined()
+    expect(result.data['ご住所']).toBeUndefined()
+  })
 })

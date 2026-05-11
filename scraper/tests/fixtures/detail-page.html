@@ -50,5 +50,19 @@
       <div class="bw">家族で快適に暮らせる広めの2LDK。リノベーション済みで状態良好です。</div>
     </div>
   </div>
+
+  <!-- Suumo's inquiry form ALSO uses table.bdclps. Without the form-skip
+       filter these labels would leak into the detail document as bogus
+       keys (お名前 / メールアドレス / 電話番号 / ご住所). -->
+  <form action="/inquiry">
+    <table class="bdclps">
+      <tbody>
+        <tr><th>お名前</th><td>必須: 姓名 フリガナ(任意)</td></tr>
+        <tr><th>メールアドレス</th><td>※PCメール推奨 半角英数必須</td></tr>
+        <tr><th>電話番号</th><td>半角必須: 連絡希望時間（任意）</td></tr>
+        <tr><th>ご住所</th><td>必須: 郵便番号 ※ハイフンなしで入力</td></tr>
+      </tbody>
+    </table>
+  </form>
 </body>
 </html>

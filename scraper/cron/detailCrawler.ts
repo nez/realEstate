@@ -12,6 +12,7 @@ import {
 } from '../lib/status'
 import { ensureIndexes } from '../lib/indexes'
 import { config } from '../lib/config'
+import { extractHydration } from '../lib/hydration'
 
 const BATCH_SIZE = 20
 
@@ -73,15 +74,21 @@ const handleResult = async (
     return 'error'
   }
 
+  // Promote a curated subset of detail fields onto the listing so queries
+  // can filter on layout / build year / monthly fees without an $lookup.
+  const hydration = extractHydration(validated.data)
+  const successWithHydration = successPatch()
+  Object.assign(successWithHydration.$set, hydration)
+
   try {
     await collections.details.insertOne(validated.data as any)
-    await applyOutcome(collections.listings, doc._id, successPatch())
+    await applyOutcome(collections.listings, doc._id, successWithHydration)
     return 'success'
   } catch (err: any) {
     // A duplicate detail row (e.g. re-scrape of an already-saved listing) is harmless;
     // mark the listing successful so we don't retry forever.
     if (err.code === 11000) {
-      await applyOutcome(collections.listings, doc._id, successPatch())
+      await applyOutcome(collections.listings, doc._id, successWithHydration)
       return 'success'
     }
     logger.error(`[SAVE] failed to insert detail for ${doc.url}: ${err.message}`)
