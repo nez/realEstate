@@ -1,3 +1,5 @@
+import { config } from './config'
+
 export default class ItemInfo {
   _id: string
   category: string
@@ -38,7 +40,7 @@ export default class ItemInfo {
     this.station = station
     this.description = description
     this.image = image
-    this.url = process.env.BASE_PATH + url
+    this.url = config().scraper.basePath + url
     this.price = price
     this.size = size
     this.age = age

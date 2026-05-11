@@ -3,6 +3,7 @@ import logger from './logger'
 import { extractPrice, parseSquareMeters } from './parserUtils'
 import { classifyError } from './status'
 import { detectBlockPage, fetchHtml } from './http'
+import { config } from './config'
 
 export type ScrapeResult =
   | { kind: 'success', data: Record<string, any> }
@@ -29,9 +30,8 @@ export const parseDetailHtml = (html: string, url: string): ScrapeResult => {
 
   const tables = document.querySelectorAll('table.bdclps')
   let totalFieldsExtracted = 0
-  tables.forEach((table: any) => {
-    const rows = table.querySelectorAll('tr')
-    rows.forEach((row: any) => {
+  tables.forEach((table: Element) => {
+    table.querySelectorAll('tr').forEach((row: Element) => {
       const headers = row.querySelectorAll('th')
       const cells = row.querySelectorAll('td')
       for (let i = 0; i < headers.length; i++) {
@@ -55,7 +55,9 @@ export const parseDetailHtml = (html: string, url: string): ScrapeResult => {
   }
 
   const images: string[] = []
-  document.querySelectorAll('img').forEach((img: any) => {
+  document.querySelectorAll('img').forEach((img: HTMLImageElement) => {
+    // Suumo uses a non-standard `rel` attribute for the high-resolution
+    // URL; fall back to `src` for older listing markup.
     const imgUrl = img.getAttribute('rel') ?? img.getAttribute('src')
     if (
       imgUrl &&
@@ -70,7 +72,7 @@ export const parseDetailHtml = (html: string, url: string): ScrapeResult => {
   })
   details.images = images
 
-  const featuresSection = Array.from(document.querySelectorAll('h3')).find((h3: any) =>
+  const featuresSection = Array.from(document.querySelectorAll('h3')).find((h3: Element) =>
     h3.textContent?.includes('特徴ピックアップ')
   )
   if (featuresSection?.nextElementSibling?.textContent) {
@@ -78,7 +80,7 @@ export const parseDetailHtml = (html: string, url: string): ScrapeResult => {
       .split(/\s*\/\s*/).filter((f: string) => f.length > 0)
   }
 
-  const sellerCommentSection = Array.from(document.querySelectorAll('h3')).find((h3: any) =>
+  const sellerCommentSection = Array.from(document.querySelectorAll('h3')).find((h3: Element) =>
     h3.textContent?.includes('売主コメント')
   )
   const commentBw = sellerCommentSection?.parentElement?.nextElementSibling?.querySelector('.bw')
@@ -98,7 +100,7 @@ export const parseDetailHtml = (html: string, url: string): ScrapeResult => {
   details.scrapedAt = new Date()
   details.url = url
 
-  if (process.env.STORE_HTML !== 'false') {
+  if (config().scraper.storeHtml) {
     details.html = html
   }
 

@@ -1,9 +1,10 @@
 import logger from './lib/logger'
+import { config } from './lib/config'
 import crawler from './cron/crawler'
 import detailCrawler from './cron/detailCrawler'
 
 const main = async (): Promise<void> => {
-  const mode = process.env.SCRAPE_MODE ?? 'LISTING'
+  const { mode } = config().scraper
   logger.info(`Starting scraper in ${mode} mode.`)
 
   if (mode === 'DETAIL') {

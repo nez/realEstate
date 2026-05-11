@@ -11,22 +11,15 @@ const safeGetAttribute = (item: Element, selector: string, attribute: string): s
 
 const getInfoFromTable = (item: Element): string[] => {
   const tableInfo: string[] = []
-  // This part is less critical to make safe as it's a specific sub-parser
-  const firstTableRows = item.querySelectorAll('.infodatabox-boxgroup .listtable:nth-of-type(1) tbody tr')
-  firstTableRows.forEach((row: any) => {
-    const cells = row.querySelectorAll('td')
-    cells.forEach((cell: HTMLElement) => {
-      tableInfo.push((cell?.textContent ?? '').trim().replace(/\s+/g, ' '))
+  const collectCells = (selector: string): void => {
+    item.querySelectorAll(selector).forEach((row: Element) => {
+      row.querySelectorAll('td').forEach((cell: Element) => {
+        tableInfo.push((cell.textContent ?? '').trim().replace(/\s+/g, ' '))
+      })
     })
-  })
-
-  const secondTableRows = item.querySelectorAll('.infodatabox-boxgroup .listtable:nth-of-type(2) tbody tr')
-  secondTableRows.forEach((row: any) => {
-    const cells = row.querySelectorAll('td')
-    cells.forEach((cell: HTMLElement) => {
-      tableInfo.push((cell?.textContent ?? '').trim().replace(/\s+/g, ' '))
-    })
-  })
+  }
+  collectCells('.infodatabox-boxgroup .listtable:nth-of-type(1) tbody tr')
+  collectCells('.infodatabox-boxgroup .listtable:nth-of-type(2) tbody tr')
   return tableInfo
 }
 

@@ -1,5 +1,6 @@
 import got, { type OptionsOfTextResponseBody, type Method } from 'got'
 import logger from './logger'
+import { config } from './config'
 
 // Single source of truth for browser fingerprints we rotate through.
 const USER_AGENTS = [
@@ -38,14 +39,15 @@ const DEFAULT_RETRY = {
 // Module-level token-bucket. Every fetchHtml call awaits a slot before sending
 // a request, replacing the ad-hoc 2-3 s sleeps that lived in each crawler.
 
-const defaultMaxRpm = (): number => {
-  const raw = process.env.MAX_REQ_PER_MINUTE
-  const parsed = raw ? parseInt(raw, 10) : 30
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : 30
-}
-
-let minIntervalMs = Math.floor(60_000 / defaultMaxRpm())
+// Lazy init so importing lib/http.ts doesn't read env until it's needed.
+let minIntervalMs: number | null = null
 let nextAllowedAt = 0
+
+const ensureInitialized = (): void => {
+  if (minIntervalMs !== null) return
+  const rpm = config().scraper.maxReqPerMinute
+  minIntervalMs = Math.floor(60_000 / Math.max(1, rpm))
+}
 
 export const setRateLimit = (requestsPerMinute: number): void => {
   if (!Number.isFinite(requestsPerMinute) || requestsPerMinute <= 0) {
@@ -63,9 +65,11 @@ export const __resetRateLimiterForTests = (): void => {
 
 // Exported for direct unit testing. Callers should usually use fetchHtml instead.
 export const acquireSlot = async (): Promise<void> => {
+  ensureInitialized()
+  const interval = minIntervalMs ?? 0
   const now = Date.now()
   const wait = Math.max(0, nextAllowedAt - now)
-  nextAllowedAt = Math.max(now, nextAllowedAt) + minIntervalMs
+  nextAllowedAt = Math.max(now, nextAllowedAt) + interval
   if (wait > 0) {
     await new Promise<void>(resolve => setTimeout(resolve, wait))
   }

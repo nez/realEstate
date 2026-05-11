@@ -2,6 +2,7 @@
 import { parseArgs } from 'util'
 import client from '../lib/client'
 import { ensureIndexes } from '../lib/indexes'
+import { config } from '../lib/config'
 import { formatM2, formatYen, renderTable, truncate } from './format'
 
 const USAGE = `Usage:
@@ -66,8 +67,8 @@ const runListings = async (args: string[]): Promise<void> => {
     }
   })
 
-  const dbName = process.env.MONGO_DB_NAME ?? 'suumo'
-  const listings = client.db(dbName).collection(process.env.MONGO_COLLECTION_NAME ?? 'listings')
+  const { mongo } = config()
+  const listings = client.db(mongo.dbName).collection(mongo.collections.listings)
 
   const match: Record<string, unknown> = {}
   if (values['max-sale']) match.salePriceYen = { $lte: parseInt(values['max-sale'], 10) }
@@ -162,8 +163,8 @@ const runChanges = async (args: string[]): Promise<void> => {
     }
   })
 
-  const dbName = process.env.MONGO_DB_NAME ?? 'suumo'
-  const changes = client.db(dbName).collection(process.env.MONGO_COLLECTION_CHANGES ?? 'change_events')
+  const { mongo } = config()
+  const changes = client.db(mongo.dbName).collection(mongo.collections.changeEvents)
 
   const match: Record<string, unknown> = {}
   if (values.kind) match.kind = values.kind
@@ -209,13 +210,13 @@ const main = async (): Promise<void> => {
     return
   }
 
-  const dbName = process.env.MONGO_DB_NAME ?? 'suumo'
-  const db = client.db(dbName)
+  const { mongo } = config()
+  const db = client.db(mongo.dbName)
   await ensureIndexes(db, {
-    listings: process.env.MONGO_COLLECTION_NAME ?? 'listings',
-    details: process.env.MONGO_COLLECTION_DETAILS ?? 'details',
-    changeEvents: process.env.MONGO_COLLECTION_CHANGES ?? 'change_events',
-    parseErrors: process.env.MONGO_COLLECTION_PARSE_ERRORS ?? 'parse_errors'
+    listings: mongo.collections.listings,
+    details: mongo.collections.details,
+    changeEvents: mongo.collections.changeEvents,
+    parseErrors: mongo.collections.parseErrors
   })
 
   switch (subcommand) {

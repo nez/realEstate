@@ -1,4 +1,3 @@
-/// <reference lib="dom" />
 import type { AnyBulkWriteOperation } from 'mongodb'
 import scrapePage from '../lib/scrape'
 import { getNumbers } from '../lib/number'
@@ -12,6 +11,7 @@ import {
   priceHistoryEntriesFromEvents
 } from '../lib/changes'
 import { ensureIndexes } from '../lib/indexes'
+import { config } from '../lib/config'
 
 // Crash-resume window. If the prior run's state is older than this we treat it
 // as abandoned and start fresh at page 1. Each successful nightly run completes
@@ -88,23 +88,18 @@ const buildOperationsForBatch = (
 const crawler = async (): Promise<void> => {
   logger.info('Start: Crawler is scraping and saving to the database...')
 
-  const dbName = process.env.MONGO_DB_NAME ?? 'suumo'
-  const listingsCollectionName = process.env.MONGO_COLLECTION_NAME ?? 'listings'
-  const stateCollectionName = process.env.MONGO_COLLECTION_STATE ?? 'scraper_state'
-  const parseErrorsCollectionName = process.env.MONGO_COLLECTION_PARSE_ERRORS ?? 'parse_errors'
-  const changeEventsCollectionName = process.env.MONGO_COLLECTION_CHANGES ?? 'change_events'
-
-  const database = client.db(dbName)
-  const listingsCollection = database.collection(listingsCollectionName)
-  const stateCollection = database.collection(stateCollectionName)
-  const parseErrorsCollection = database.collection(parseErrorsCollectionName)
-  const changeEventsCollection = database.collection(changeEventsCollectionName)
+  const { mongo, scraper } = config()
+  const database = client.db(mongo.dbName)
+  const listingsCollection = database.collection(mongo.collections.listings)
+  const stateCollection = database.collection(mongo.collections.state)
+  const parseErrorsCollection = database.collection(mongo.collections.parseErrors)
+  const changeEventsCollection = database.collection(mongo.collections.changeEvents)
 
   await ensureIndexes(database, {
-    listings: listingsCollectionName,
-    details: process.env.MONGO_COLLECTION_DETAILS ?? 'details',
-    changeEvents: changeEventsCollectionName,
-    parseErrors: parseErrorsCollectionName
+    listings: mongo.collections.listings,
+    details: mongo.collections.details,
+    changeEvents: mongo.collections.changeEvents,
+    parseErrors: mongo.collections.parseErrors
   })
 
   // Resume mid-run if the previous run was abandoned within the resume window;
@@ -137,7 +132,7 @@ const crawler = async (): Promise<void> => {
     for (let i = startPage; i <= maxPageNumber; i++) {
       try {
         logger.info(`Scraping page ${i} of ${maxPageNumber}...`)
-        const data = await scrapePage(process.env.START_PATH + `&pn=${i}`)
+        const data = await scrapePage(scraper.startPath + `&pn=${i}`)
         if (!data || data.length === 0) {
           await stateCollection.updateOne(
             { stateId: 'crawler' },

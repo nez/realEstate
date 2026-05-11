@@ -11,6 +11,7 @@ import {
   transientErrorPatch
 } from '../lib/status'
 import { ensureIndexes } from '../lib/indexes'
+import { config } from '../lib/config'
 
 const BATCH_SIZE = 20
 
@@ -99,23 +100,19 @@ const detailCrawler = async (): Promise<void> => {
   logger.info('DETAIL CRAWLER STARTING')
   logger.info('='.repeat(50))
 
-  const dbName = process.env.MONGO_DB_NAME ?? 'suumo'
-  const listingsCollectionName = process.env.MONGO_COLLECTION_NAME ?? 'listings'
-  const detailsCollectionName = process.env.MONGO_COLLECTION_DETAILS ?? 'details'
-  const parseErrorsCollectionName = process.env.MONGO_COLLECTION_PARSE_ERRORS ?? 'parse_errors'
-
-  const database = client.db(dbName)
+  const { mongo } = config()
+  const database = client.db(mongo.dbName)
   const collections = {
-    listings: database.collection(listingsCollectionName),
-    details: database.collection(detailsCollectionName),
-    parseErrors: database.collection(parseErrorsCollectionName)
+    listings: database.collection(mongo.collections.listings),
+    details: database.collection(mongo.collections.details),
+    parseErrors: database.collection(mongo.collections.parseErrors)
   }
 
   await ensureIndexes(database, {
-    listings: listingsCollectionName,
-    details: detailsCollectionName,
-    changeEvents: process.env.MONGO_COLLECTION_CHANGES ?? 'change_events',
-    parseErrors: parseErrorsCollectionName
+    listings: mongo.collections.listings,
+    details: mongo.collections.details,
+    changeEvents: mongo.collections.changeEvents,
+    parseErrors: mongo.collections.parseErrors
   })
 
   let processedCount = 0
