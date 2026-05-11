@@ -11,6 +11,7 @@ import {
   diffListing,
   priceHistoryEntriesFromEvents
 } from '../lib/changes'
+import { ensureIndexes } from '../lib/indexes'
 
 const sleep = async (ms: number) => await new Promise(resolve => setTimeout(resolve, ms))
 
@@ -100,6 +101,13 @@ const crawler = async (): Promise<void> => {
   const stateCollection = database.collection(stateCollectionName)
   const parseErrorsCollection = database.collection(parseErrorsCollectionName)
   const changeEventsCollection = database.collection(changeEventsCollectionName)
+
+  await ensureIndexes(database, {
+    listings: listingsCollectionName,
+    details: process.env.MONGO_COLLECTION_DETAILS ?? 'details',
+    changeEvents: changeEventsCollectionName,
+    parseErrors: parseErrorsCollectionName
+  })
 
   // Resume mid-run if the previous run was abandoned within the resume window;
   // otherwise start a fresh full pass from page 1.

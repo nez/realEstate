@@ -10,6 +10,7 @@ import {
   successPatch,
   transientErrorPatch
 } from '../lib/status'
+import { ensureIndexes } from '../lib/indexes'
 
 const sleep = async (ms: number) => await new Promise(resolve => setTimeout(resolve, ms))
 
@@ -112,6 +113,13 @@ const detailCrawler = async (): Promise<void> => {
     details: database.collection(detailsCollectionName),
     parseErrors: database.collection(parseErrorsCollectionName)
   }
+
+  await ensureIndexes(database, {
+    listings: listingsCollectionName,
+    details: detailsCollectionName,
+    changeEvents: process.env.MONGO_COLLECTION_CHANGES ?? 'change_events',
+    parseErrors: parseErrorsCollectionName
+  })
 
   let processedCount = 0
   let successCount = 0

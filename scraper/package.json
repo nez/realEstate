@@ -6,7 +6,8 @@
     "dev": "bun run index.ts",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
-    "test": "bun test"
+    "test": "bun test",
+    "query": "bun run cli/query.ts"
   },
   "devDependencies": {
     "@types/bun": "latest",
