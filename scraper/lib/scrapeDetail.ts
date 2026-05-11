@@ -15,6 +15,109 @@ export type ScrapeResult =
   | { kind: 'transient', reason: string }
   | { kind: 'permanent', reason: string }
 
+const cleanValue = (value: string): string =>
+  value
+    .replace(/\[\s*[□■]\s*[^\]]+\]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+
+// Pure parser: takes a fetched HTML body and the source URL, returns a ScrapeResult.
+// Pulled out of scrapeDetailPage so it's testable without a real HTTP fetch.
+export const parseDetailHtml = (html: string, url: string): ScrapeResult => {
+  if (!html || html.length < 1000) {
+    return { kind: 'transient', reason: `response too small (${html?.length ?? 0} bytes)` }
+  }
+  if (!html.includes('html') && !html.includes('HTML')) {
+    return { kind: 'transient', reason: 'response not HTML' }
+  }
+
+  const dom = new JSDOM(html)
+  const document = dom.window.document
+  const details: Record<string, any> = {}
+
+  const tables = document.querySelectorAll('table.bdclps')
+  let totalFieldsExtracted = 0
+  tables.forEach((table: any) => {
+    const rows = table.querySelectorAll('tr')
+    rows.forEach((row: any) => {
+      const headers = row.querySelectorAll('th')
+      const cells = row.querySelectorAll('td')
+      for (let i = 0; i < headers.length; i++) {
+        const th = headers[i]
+        const td = cells[i]
+        if (th?.textContent && td?.textContent) {
+          const key = th.textContent.trim().replace(/ヒント/g, '').trim()
+          const value = cleanValue(td.textContent.trim())
+          if (key.length > 0 && !details[key]) {
+            details[key] = value
+            totalFieldsExtracted++
+          }
+        }
+      }
+    })
+  })
+
+  // Zero tables on a non-trivial HTML page almost always means we hit a block page.
+  if (totalFieldsExtracted === 0) {
+    return { kind: 'transient', reason: 'parser extracted 0 fields (possible block page)' }
+  }
+
+  const images: string[] = []
+  document.querySelectorAll('img').forEach((img: any) => {
+    const imgUrl = img.getAttribute('rel') ?? img.getAttribute('src')
+    if (
+      imgUrl &&
+      !imgUrl.includes('spacer.gif') &&
+      !imgUrl.includes('logo') &&
+      !imgUrl.includes('btn.gif') &&
+      imgUrl.startsWith('http') &&
+      !images.includes(imgUrl)
+    ) {
+      images.push(imgUrl)
+    }
+  })
+  details.images = images
+
+  const featuresSection = Array.from(document.querySelectorAll('h3')).find((h3: any) =>
+    h3.textContent?.includes('特徴ピックアップ')
+  )
+  if (featuresSection?.nextElementSibling?.textContent) {
+    details.features = featuresSection.nextElementSibling.textContent.trim()
+      .split(/\s*\/\s*/).filter((f: string) => f.length > 0)
+  }
+
+  const sellerCommentSection = Array.from(document.querySelectorAll('h3')).find((h3: any) =>
+    h3.textContent?.includes('売主コメント')
+  )
+  const commentBw = sellerCommentSection?.parentElement?.nextElementSibling?.querySelector('.bw')
+  if (commentBw?.textContent) {
+    details.description = commentBw.textContent.trim()
+  }
+
+  if (details['価格']) {
+    const { salePriceYen, rentPriceYen } = extractPrice(details['価格'])
+    details.salePriceYen = salePriceYen
+    details.rentPriceYen = rentPriceYen
+  }
+  if (details['専有面積']) {
+    details.sizeM2 = parseSquareMeters(details['専有面積'])
+  }
+
+  details.scrapedAt = new Date()
+  details.url = url
+
+  if (process.env.STORE_HTML !== 'false') {
+    details.html = html
+  }
+
+  const urlMatch = url.match(/nc_(\d+)/)
+  if (urlMatch) {
+    details.listingId = urlMatch[1]
+  }
+
+  return { kind: 'success', data: details }
+}
+
 const scrapeDetailPage = async (url: string): Promise<ScrapeResult> => {
   const startTime = Date.now()
   const userAgent = userAgents[Math.floor(Math.random() * userAgents.length)]
@@ -66,111 +169,13 @@ const scrapeDetailPage = async (url: string): Promise<ScrapeResult> => {
     return { kind, reason }
   }
 
-  // Response sanity: too small or non-HTML → likely a block/CAPTCHA page. Treat as transient.
-  if (!responseBody || responseBody.length < 1000) {
-    const reason = `response too small (${responseBody?.length ?? 0} bytes)`
-    logger.warn(`[DETAIL-TRANSIENT] ${reason}`)
-    return { kind: 'transient', reason }
+  const result = parseDetailHtml(responseBody, url)
+  if (result.kind === 'success') {
+    logger.info(`[DETAIL-SUCCESS] ${Object.keys(result.data).length} fields in ${Date.now() - startTime}ms`)
+  } else {
+    logger.warn(`[DETAIL-${result.kind.toUpperCase()}] ${result.reason}`)
   }
-  if (!responseBody.includes('html') && !responseBody.includes('HTML')) {
-    logger.warn('[DETAIL-TRANSIENT] response does not look like HTML')
-    return { kind: 'transient', reason: 'response not HTML' }
-  }
-
-  const dom = new JSDOM(responseBody)
-  const document = dom.window.document
-  const details: Record<string, any> = {}
-
-  const cleanValue = (value: string): string =>
-    value
-      .replace(/\[\s*[□■]\s*[^\]]+\]/g, '')
-      .replace(/\s+/g, ' ')
-      .trim()
-
-  const tables = document.querySelectorAll('table.bdclps')
-  let totalFieldsExtracted = 0
-  tables.forEach((table: any) => {
-    const rows = table.querySelectorAll('tr')
-    rows.forEach((row: any) => {
-      const headers = row.querySelectorAll('th')
-      const cells = row.querySelectorAll('td')
-      for (let i = 0; i < headers.length; i++) {
-        const th = headers[i]
-        const td = cells[i]
-        if (th?.textContent && td?.textContent) {
-          const key = th.textContent.trim().replace(/ヒント/g, '').trim()
-          const value = cleanValue(td.textContent.trim())
-          if (key.length > 0 && !details[key]) {
-            details[key] = value
-            totalFieldsExtracted++
-          }
-        }
-      }
-    })
-  })
-  logger.info(`[DETAIL-EXTRACT] ${totalFieldsExtracted} fields from ${tables.length} tables`)
-
-  // Zero tables on a non-trivial HTML page almost always means we hit a block page.
-  // Hand it back as transient so the backoff machinery gets another shot later.
-  if (totalFieldsExtracted === 0) {
-    return { kind: 'transient', reason: 'parser extracted 0 fields (possible block page)' }
-  }
-
-  const images: string[] = []
-  document.querySelectorAll('img').forEach((img: any) => {
-    const imgUrl = img.getAttribute('rel') ?? img.getAttribute('src')
-    if (
-      imgUrl &&
-      !imgUrl.includes('spacer.gif') &&
-      !imgUrl.includes('logo') &&
-      !imgUrl.includes('btn.gif') &&
-      imgUrl.startsWith('http') &&
-      !images.includes(imgUrl)
-    ) {
-      images.push(imgUrl)
-    }
-  })
-  details.images = images
-
-  const featuresSection = Array.from(document.querySelectorAll('h3')).find((h3: any) =>
-    h3.textContent?.includes('特徴ピックアップ')
-  )
-  if (featuresSection?.nextElementSibling?.textContent) {
-    details.features = featuresSection.nextElementSibling.textContent.trim()
-      .split(/\s*\/\s*/).filter((f: string) => f.length > 0)
-  }
-
-  const sellerCommentSection = Array.from(document.querySelectorAll('h3')).find((h3: any) =>
-    h3.textContent?.includes('売主コメント')
-  )
-  const commentBw = sellerCommentSection?.parentElement?.nextElementSibling?.querySelector('.bw')
-  if (commentBw?.textContent) {
-    details.description = commentBw.textContent.trim()
-  }
-
-  if (details['価格']) {
-    const { salePriceYen, rentPriceYen } = extractPrice(details['価格'])
-    details.salePriceYen = salePriceYen
-    details.rentPriceYen = rentPriceYen
-  }
-  if (details['専有面積']) {
-    details.sizeM2 = parseSquareMeters(details['専有面積'])
-  }
-
-  details.scrapedAt = new Date()
-  details.url = url
-
-  if (process.env.STORE_HTML !== 'false') {
-    details.html = responseBody
-  }
-
-  const urlMatch = url.match(/nc_(\d+)/)
-  if (urlMatch) {
-    details.listingId = urlMatch[1]
-  }
-
-  logger.info(`[DETAIL-SUCCESS] ${Object.keys(details).length} fields in ${Date.now() - startTime}ms`)
-  return { kind: 'success', data: details }
+  return result
 }
 
 export default scrapeDetailPage

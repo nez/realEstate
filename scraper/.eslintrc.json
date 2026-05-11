@@ -9,7 +9,7 @@
         "sourceType": "module",
         "project": "./tsconfig.json"
     },
-    "ignorePatterns": ["node_modules/", "*.html"],
+    "ignorePatterns": ["node_modules/", "*.html", "tests/fixtures/"],
     "rules": {
         "@typescript-eslint/strict-boolean-expressions": "off",
         "@typescript-eslint/no-unsafe-argument": "off",

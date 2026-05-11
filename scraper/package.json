@@ -5,7 +5,8 @@
   "scripts": {
     "dev": "bun run index.ts",
     "typecheck": "tsc --noEmit",
-    "lint": "eslint ."
+    "lint": "eslint .",
+    "test": "bun test"
   },
   "devDependencies": {
     "@types/bun": "latest",
