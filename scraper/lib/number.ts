@@ -1,7 +1,6 @@
 import { JSDOM } from 'jsdom'
 import logger from './logger'
 import { fetchHtml } from './http'
-import { config } from './config'
 
 const getItemNumber = (document: Document): number => {
   const totalItemsElement = document.querySelector('.pagination_set-hit')
@@ -17,10 +16,9 @@ const getMaxPageNumber = (document: Document): number => {
   return maxPageNumberMatch !== null ? parseInt(maxPageNumberMatch[1], 10) : 0
 }
 
-const getNumbers = async (): Promise<{ totalItems: number, maxPageNumber: number }> => {
-  const { startPath } = config().scraper
-  if (!startPath) throw new Error('START_PATH env var is not set')
-  const { body } = await fetchHtml(startPath)
+const getNumbers = async (url: string): Promise<{ totalItems: number, maxPageNumber: number }> => {
+  if (!url) throw new Error('getNumbers: empty URL')
+  const { body } = await fetchHtml(url)
 
   const dom = new JSDOM(body)
   const document = dom.window.document

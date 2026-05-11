@@ -202,6 +202,18 @@ spec:
                 claimName: mongodb-backup
 
 ---
+# Suumo entry points the listing crawler should fan out over. Default value
+# covers all 9 Japanese regions (~447k listings, ~14.9k pages). Edit via
+# `kubectl -n realestate edit configmap scraper-paths` without redeploying.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: scraper-paths
+  namespace: realestate
+data:
+  START_PATHS: "https://suumo.jp/jj/common/ichiran/JJ901FC004/?ar=010&kwd=&bs=010&bs=011&bs=020&bs=021&bs=030&cb=0.0&ct=9999999&kb=0&kt=9999999&km=1&xb=0&xt=9999999&et=9999999&cn=9999999&newflg=0;https://suumo.jp/jj/common/ichiran/JJ901FC004/?ar=020&kwd=&bs=010&bs=011&bs=020&bs=021&bs=030&cb=0.0&ct=9999999&kb=0&kt=9999999&km=1&xb=0&xt=9999999&et=9999999&cn=9999999&newflg=0;https://suumo.jp/jj/common/ichiran/JJ901FC004/?ar=030&kwd=&bs=010&bs=011&bs=020&bs=021&bs=030&cb=0.0&ct=9999999&kb=0&kt=9999999&km=1&xb=0&xt=9999999&et=9999999&cn=9999999&newflg=0;https://suumo.jp/jj/common/ichiran/JJ901FC004/?ar=040&kwd=&bs=010&bs=011&bs=020&bs=021&bs=030&cb=0.0&ct=9999999&kb=0&kt=9999999&km=1&xb=0&xt=9999999&et=9999999&cn=9999999&newflg=0;https://suumo.jp/jj/common/ichiran/JJ901FC004/?ar=050&kwd=&bs=010&bs=011&bs=020&bs=021&bs=030&cb=0.0&ct=9999999&kb=0&kt=9999999&km=1&xb=0&xt=9999999&et=9999999&cn=9999999&newflg=0;https://suumo.jp/jj/common/ichiran/JJ901FC004/?ar=060&kwd=&bs=010&bs=011&bs=020&bs=021&bs=030&cb=0.0&ct=9999999&kb=0&kt=9999999&km=1&xb=0&xt=9999999&et=9999999&cn=9999999&newflg=0;https://suumo.jp/jj/common/ichiran/JJ901FC004/?ar=070&kwd=&bs=010&bs=011&bs=020&bs=021&bs=030&cb=0.0&ct=9999999&kb=0&kt=9999999&km=1&xb=0&xt=9999999&et=9999999&cn=9999999&newflg=0;https://suumo.jp/jj/common/ichiran/JJ901FC004/?ar=080&kwd=&bs=010&bs=011&bs=020&bs=021&bs=030&cb=0.0&ct=9999999&kb=0&kt=9999999&km=1&xb=0&xt=9999999&et=9999999&cn=9999999&newflg=0;https://suumo.jp/jj/common/ichiran/JJ901FC004/?ar=090&kwd=&bs=010&bs=011&bs=020&bs=021&bs=030&cb=0.0&ct=9999999&kb=0&kt=9999999&km=1&xb=0&xt=9999999&et=9999999&cn=9999999&newflg=0"
+
+---
 # Listing crawler: discovers properties from index pages. Runs nightly.
 apiVersion: batch/v1
 kind: CronJob
@@ -236,6 +248,11 @@ spec:
                     secretKeyRef:
                       name: mongodb-creds
                       key: MONGO_URI_APP
+                - name: START_PATHS
+                  valueFrom:
+                    configMapKeyRef:
+                      name: scraper-paths
+                      key: START_PATHS
 
 ---
 # Detail crawler: fills in details for unscraped listings. Runs frequently.

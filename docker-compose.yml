@@ -36,6 +36,8 @@ services:
       SCRAPE_MODE: ${SCRAPE_MODE:-LISTING}
       STORE_HTML: ${STORE_HTML:-true}
       MAX_REQ_PER_MINUTE: ${MAX_REQ_PER_MINUTE:-30}
+      START_PATH: ${START_PATH:-}
+      START_PATHS: ${START_PATHS:-}
     depends_on:
       - mongodb
 

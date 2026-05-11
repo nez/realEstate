@@ -1,4 +1,5 @@
-import type { AnyBulkWriteOperation } from 'mongodb'
+import { createHash } from 'crypto'
+import type { AnyBulkWriteOperation, Collection } from 'mongodb'
 import scrapePage from '../lib/scrape'
 import { getNumbers } from '../lib/number'
 import client from '../lib/client'
@@ -17,6 +18,12 @@ import { config } from '../lib/config'
 // as abandoned and start fresh at page 1. Each successful nightly run completes
 // in well under this window.
 const RESUME_WINDOW_MS = 6 * 60 * 60 * 1000
+
+// Short, stable id used to namespace each path's resume state. Two different
+// URLs (e.g. one per Japanese region) get independent lastPage cursors so they
+// don't trample each other.
+const pathStateId = (url: string): string =>
+  `crawler:${createHash('sha256').update(url).digest('hex').slice(0, 10)}`
 
 const buildOperationsForBatch = (
   valid: Listing[],
@@ -72,7 +79,6 @@ const buildOperationsForBatch = (
       set.salePriceYen = item.salePriceYen
       set.rentPriceYen = item.rentPriceYen
     }
-    // Backfill firstSeenAt on legacy rows that pre-date M2.
     if (!existing.firstSeenAt) set.firstSeenAt = now
 
     const update: Record<string, unknown> = { $set: set }
@@ -85,63 +91,50 @@ const buildOperationsForBatch = (
   return { ops, events }
 }
 
-const crawler = async (): Promise<void> => {
-  logger.info('Start: Crawler is scraping and saving to the database...')
+interface PathStats { newListings: number, priceChanges: number, pagesCrawled: number }
 
-  const { mongo, scraper } = config()
-  const database = client.db(mongo.dbName)
-  const listingsCollection = database.collection(mongo.collections.listings)
-  const stateCollection = database.collection(mongo.collections.state)
-  const parseErrorsCollection = database.collection(mongo.collections.parseErrors)
-  const changeEventsCollection = database.collection(mongo.collections.changeEvents)
+const crawlSinglePath = async (
+  startPath: string,
+  collections: {
+    listings: Collection
+    state: Collection
+    parseErrors: Collection
+    changeEvents: Collection
+  }
+): Promise<PathStats> => {
+  const stateId = pathStateId(startPath)
+  const stats: PathStats = { newListings: 0, priceChanges: 0, pagesCrawled: 0 }
 
-  await ensureIndexes(database, {
-    listings: mongo.collections.listings,
-    details: mongo.collections.details,
-    changeEvents: mongo.collections.changeEvents,
-    parseErrors: mongo.collections.parseErrors
-  })
-
-  // Resume mid-run if the previous run was abandoned within the resume window;
-  // otherwise start a fresh full pass from page 1.
   const now = new Date()
   let runStartedAt = now
   let startPage = 1
-  const state = await stateCollection.findOne({ stateId: 'crawler' })
+  const state = await collections.state.findOne({ stateId })
   if (state?.runStartedAt && state?.lastPage && state.lastPage > 0 &&
       now.getTime() - new Date(state.runStartedAt).getTime() < RESUME_WINDOW_MS) {
     runStartedAt = new Date(state.runStartedAt)
     startPage = state.lastPage + 1
-    logger.info(`Resuming run started ${runStartedAt.toISOString()} from page ${startPage}`)
+    logger.info(`[${stateId}] Resuming from page ${startPage}`)
   } else {
-    await stateCollection.updateOne(
-      { stateId: 'crawler' },
-      { $set: { runStartedAt, lastPage: 0 } },
+    await collections.state.updateOne(
+      { stateId },
+      { $set: { stateId, startPath, runStartedAt, lastPage: 0 } },
       { upsert: true }
     )
-    logger.info('Starting a fresh listing crawl from page 1')
+    logger.info(`[${stateId}] Fresh crawl from page 1 of ${startPath.substring(0, 90)}...`)
   }
 
-  let totalNewListings = 0
-  let totalPriceChanges = 0
-
   try {
-    const { totalItems, maxPageNumber } = await getNumbers()
-    logger.info(`Processing: total items: ${totalItems}, max page: ${maxPageNumber}`)
+    const { totalItems, maxPageNumber } = await getNumbers(startPath)
+    logger.info(`[${stateId}] total items: ${totalItems}, max page: ${maxPageNumber}`)
 
     for (let i = startPage; i <= maxPageNumber; i++) {
       try {
-        logger.info(`Scraping page ${i} of ${maxPageNumber}...`)
-        const data = await scrapePage(scraper.startPath + `&pn=${i}`)
+        const data = await scrapePage(startPath + `&pn=${i}`)
         if (!data || data.length === 0) {
-          await stateCollection.updateOne(
-            { stateId: 'crawler' },
-            { $set: { lastPage: i } }
-          )
+          await collections.state.updateOne({ stateId }, { $set: { lastPage: i } })
           continue
         }
 
-        // Validate every scraped row, splitting good from bad.
         const valid: Listing[] = []
         const invalid: Array<{ rawDoc: unknown, issues: unknown }> = []
         for (const item of data) {
@@ -151,9 +144,9 @@ const crawler = async (): Promise<void> => {
         }
 
         if (invalid.length > 0) {
-          logger.warn(`Page ${i}: ${invalid.length}/${data.length} listings failed schema validation`)
+          logger.warn(`[${stateId}] p${i}: ${invalid.length}/${data.length} failed schema validation`)
           try {
-            await parseErrorsCollection.insertMany(
+            await collections.parseErrors.insertMany(
               invalid.map(e => ({
                 ...e,
                 sourceUrl: (e.rawDoc as any)?.url ?? null,
@@ -163,14 +156,13 @@ const crawler = async (): Promise<void> => {
               { ordered: false }
             )
           } catch (err: any) {
-            logger.error(`Page ${i}: failed to record parse errors: ${err.message}`)
+            logger.error(`[${stateId}] p${i}: parse-error store failed: ${err.message}`)
           }
         }
 
         if (valid.length > 0) {
-          // Bulk-fetch existing rows for diffing in one round-trip.
           const ids = valid.map(v => v._id)
-          const existingDocs = await listingsCollection
+          const existingDocs = await collections.listings
             .find(
               { _id: { $in: ids as any } },
               { projection: { _id: 1, url: 1, salePriceYen: 1, rentPriceYen: 1, firstSeenAt: 1 } }
@@ -183,11 +175,10 @@ const crawler = async (): Promise<void> => {
 
           if (ops.length > 0) {
             try {
-              await listingsCollection.bulkWrite(ops, { ordered: false })
+              await collections.listings.bulkWrite(ops, { ordered: false })
             } catch (err: any) {
-              // A surprise dup-key on an insertOne (race / parser quirk) is non-fatal here.
               if (err.code === 11000 || err.writeErrors) {
-                logger.warn(`Page ${i}: bulkWrite reported ${err.writeErrors?.length ?? 1} write errors (continuing)`)
+                logger.warn(`[${stateId}] p${i}: bulkWrite reported ${err.writeErrors?.length ?? 1} write errors (continuing)`)
               } else {
                 throw err
               }
@@ -196,43 +187,78 @@ const crawler = async (): Promise<void> => {
 
           if (events.length > 0) {
             const newOnes = events.filter(e => e.kind === 'new_listing').length
-            const priceChanges = events.length - newOnes
-            totalNewListings += newOnes
-            totalPriceChanges += priceChanges
+            stats.newListings += newOnes
+            stats.priceChanges += events.length - newOnes
             try {
-              await changeEventsCollection.insertMany(events, { ordered: false })
+              await collections.changeEvents.insertMany(events, { ordered: false })
             } catch (err: any) {
-              logger.error(`Page ${i}: failed to record change events: ${err.message}`)
+              logger.error(`[${stateId}] p${i}: change-events store failed: ${err.message}`)
             }
           }
 
-          logger.info(`Page ${i}: processed ${valid.length} listings (${events.filter(e => e.kind === 'new_listing').length} new, ${events.length - events.filter(e => e.kind === 'new_listing').length} price changes)`)
+          stats.pagesCrawled++
+          logger.info(`[${stateId}] p${i}/${maxPageNumber}: ${valid.length} listings (${events.filter(e => e.kind === 'new_listing').length} new)`)
         }
 
-        await stateCollection.updateOne(
-          { stateId: 'crawler' },
-          { $set: { lastPage: i } }
-        )
+        await collections.state.updateOne({ stateId }, { $set: { lastPage: i } })
       } catch (error: any) {
-        logger.error(`Error processing page ${i}: ${error.message}`)
+        logger.error(`[${stateId}] error on page ${i}: ${error.message}`)
         if (error.code === 'ECONNREFUSED') {
-          logger.error('Connection refused by server. Stopping crawler to prevent IP block.')
+          logger.error(`[${stateId}] connection refused — stopping this path to avoid IP block`)
           break
         }
       }
     }
 
-    // Crawl completed end-to-end: clear the resume marker so the next scheduled
-    // run starts fresh at page 1.
-    await stateCollection.updateOne(
-      { stateId: 'crawler' },
+    // Completed end-to-end: clear the resume marker so the next run starts fresh.
+    await collections.state.updateOne(
+      { stateId },
       { $set: { lastFullCrawlAt: new Date() }, $unset: { lastPage: '', runStartedAt: '' } }
     )
   } catch (error) {
-    logger.error(`Error: Error scraping and saving to the database: ${error}`)
+    logger.error(`[${stateId}] fatal: ${error}`)
   }
 
-  logger.info(`Finished: ${totalNewListings} new listings, ${totalPriceChanges} price changes`)
+  return stats
+}
+
+const crawler = async (): Promise<void> => {
+  const { mongo, scraper } = config()
+
+  if (scraper.startPaths.length === 0) {
+    logger.error('No START_PATH / START_PATHS configured. Exiting.')
+    return
+  }
+
+  logger.info(`Crawler starting against ${scraper.startPaths.length} URL${scraper.startPaths.length === 1 ? '' : 's'}`)
+
+  const database = client.db(mongo.dbName)
+  const collections = {
+    listings: database.collection(mongo.collections.listings),
+    state: database.collection(mongo.collections.state),
+    parseErrors: database.collection(mongo.collections.parseErrors),
+    changeEvents: database.collection(mongo.collections.changeEvents)
+  }
+
+  await ensureIndexes(database, {
+    listings: mongo.collections.listings,
+    details: mongo.collections.details,
+    changeEvents: mongo.collections.changeEvents,
+    parseErrors: mongo.collections.parseErrors
+  })
+
+  let grandNew = 0
+  let grandChanges = 0
+  let grandPages = 0
+  for (const [idx, startPath] of scraper.startPaths.entries()) {
+    logger.info(`=== Path ${idx + 1}/${scraper.startPaths.length} ===`)
+    const stats = await crawlSinglePath(startPath, collections)
+    grandNew += stats.newListings
+    grandChanges += stats.priceChanges
+    grandPages += stats.pagesCrawled
+  }
+
+  logger.info(`Finished: ${grandPages} pages, ${grandNew} new listings, ${grandChanges} price changes across ${scraper.startPaths.length} URL(s)`)
 }
 
 export default crawler

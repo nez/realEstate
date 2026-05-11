@@ -45,7 +45,11 @@ export interface MongoConfig {
 
 export interface ScraperConfig {
   readonly mode: 'LISTING' | 'DETAIL'
+  // Single-path config. Empty when only the multi-path env is set.
   readonly startPath: string
+  // Final, resolved list of URLs to crawl. Combines START_PATHS (semicolon
+  // separated) with the legacy START_PATH so single-path setups keep working.
+  readonly startPaths: readonly string[]
   readonly basePath: string
   readonly storeHtml: boolean
   readonly maxReqPerMinute: number
@@ -75,9 +79,21 @@ const build = (): Config => {
       changeEvents: optional('MONGO_COLLECTION_CHANGES', 'change_events')
     }
   }
+  const startPath = optional('START_PATH', '')
+  const rawPaths = optional('START_PATHS', '')
+  const startPaths: string[] = []
+  if (rawPaths.length > 0) {
+    for (const p of rawPaths.split(';')) {
+      const trimmed = p.trim()
+      if (trimmed.length > 0 && !startPaths.includes(trimmed)) startPaths.push(trimmed)
+    }
+  }
+  if (startPath.length > 0 && !startPaths.includes(startPath)) startPaths.push(startPath)
+
   const scraper: ScraperConfig = {
     mode: scrapeModeOf(optional('SCRAPE_MODE', 'LISTING')),
-    startPath: optional('START_PATH', ''),
+    startPath,
+    startPaths,
     basePath: optional('BASE_PATH', 'https://suumo.jp'),
     storeHtml: optionalBool('STORE_HTML', true),
     maxReqPerMinute: optionalInt('MAX_REQ_PER_MINUTE', 30)

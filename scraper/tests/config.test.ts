@@ -12,6 +12,7 @@ const ENV_KEYS = [
   'MONGO_COLLECTION_CHANGES',
   'SCRAPE_MODE',
   'START_PATH',
+  'START_PATHS',
   'BASE_PATH',
   'STORE_HTML',
   'MAX_REQ_PER_MINUTE'
@@ -120,6 +121,48 @@ describe('config() — optional defaults', () => {
   test('basePath defaults to suumo.jp', () => {
     delete process.env.BASE_PATH
     expect(config().scraper.basePath).toBe('https://suumo.jp')
+  })
+})
+
+describe('config() — startPaths multi-path parsing', () => {
+  test('empty when nothing is set', () => {
+    delete process.env.START_PATH
+    delete process.env.START_PATHS
+    expect(config().scraper.startPaths).toEqual([])
+  })
+
+  test('uses START_PATH when only that is set', () => {
+    delete process.env.START_PATHS
+    process.env.START_PATH = 'https://example.com/a'
+    expect([...config().scraper.startPaths]).toEqual(['https://example.com/a'])
+  })
+
+  test('parses semicolon-separated START_PATHS', () => {
+    delete process.env.START_PATH
+    process.env.START_PATHS = 'https://example.com/a;https://example.com/b;https://example.com/c'
+    expect([...config().scraper.startPaths]).toEqual([
+      'https://example.com/a',
+      'https://example.com/b',
+      'https://example.com/c'
+    ])
+  })
+
+  test('combines START_PATHS with legacy START_PATH and dedupes', () => {
+    process.env.START_PATHS = 'https://example.com/a;https://example.com/b'
+    process.env.START_PATH = 'https://example.com/b' // already in the list
+    expect([...config().scraper.startPaths]).toEqual([
+      'https://example.com/a',
+      'https://example.com/b'
+    ])
+  })
+
+  test('trims whitespace and skips empty entries', () => {
+    delete process.env.START_PATH
+    process.env.START_PATHS = ' https://example.com/a ;;  ;https://example.com/b'
+    expect([...config().scraper.startPaths]).toEqual([
+      'https://example.com/a',
+      'https://example.com/b'
+    ])
   })
 })
 
