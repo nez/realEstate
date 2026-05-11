@@ -175,8 +175,6 @@ dist
 # Finder (MacOS) folder config
 .DS_Store
 
-mongodb/data/
-
 # Local k8s secret manifests (use secret.example.yaml as a template)
 secret.yaml
 secret.*.yaml

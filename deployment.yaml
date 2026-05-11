@@ -122,6 +122,8 @@ spec:
                   value: Asia/Tokyo
                 - name: SCRAPE_MODE
                   value: DETAIL
+                - name: STORE_HTML
+                  value: "true"
                 - name: MONGO_URI
                   valueFrom:
                     secretKeyRef:

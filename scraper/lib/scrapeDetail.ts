@@ -238,8 +238,11 @@ const scrapeDetailPage = async (url: string): Promise<Record<string, any> | null
     details.scrapedAt = new Date();
     details.url = url;
 
-    // Add the full HTML for debugging/further processing
-    details.html = responseBody;
+    // Store full HTML while we're still validating parser coverage. Flip STORE_HTML=false
+    // once the structured fields are trusted; drops a large blob per row.
+    if (process.env.STORE_HTML !== 'false') {
+      details.html = responseBody;
+    }
 
     // Extract listing ID from URL
     const urlMatch = url.match(/nc_(\d+)/);

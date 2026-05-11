@@ -11,8 +11,7 @@ services:
     ports:
       - 27017:27017
     volumes:
-      - ./mongodb/mongo-init.js:/docker-entrypoint-initdb.d/mongo-init.js:ro
-      - ./mongodb/data:/data/db
+      - mongodb-data:/data/db
 
   scraper:
     build:
@@ -29,5 +28,9 @@ services:
       MONGO_COLLECTION_DETAILS: ${MONGO_COLLECTION_DETAILS:-details}
       MONGO_COLLECTION_STATE: ${MONGO_COLLECTION_STATE:-scraper_state}
       SCRAPE_MODE: ${SCRAPE_MODE:-LISTING}
+      STORE_HTML: ${STORE_HTML:-true}
     depends_on:
       - mongodb
+
+volumes:
+  mongodb-data:
